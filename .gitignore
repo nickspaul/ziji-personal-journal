@@ -1,0 +1,30 @@
+# Local records, database files, credentials, backups and development history
+/.local/
+/data/
+/backend/data/
+/backups/
+.env
+.env.*
+!.env.example
+*.local
+ziji-backup*.json
+
+# Generated dependencies and build output
+/backend/target/
+/frontend/node_modules/
+/frontend/dist/
+/backend/src/main/resources/static/
+*.tsbuildinfo
+*.class
+
+# Logs, editor state and temporary files
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
