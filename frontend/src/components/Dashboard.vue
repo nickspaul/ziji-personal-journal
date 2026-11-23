@@ -1,60 +1,272 @@
 <script setup lang="ts">
-import { computed,ref } from 'vue'
-import { ArrowUpRight,ArrowRight,Plus,Cigarette,Wine,Heart,Wallet,Activity,ShieldCheck,Clock3,Info,ChevronRight,ChevronDown,CheckCheck,BookOpen } from 'lucide-vue-next'
+import { computed,ref,watch } from 'vue'
+import { ArrowUpRight,Plus,Cigarette,Wine,Heart,Wallet,Clock3,ChevronDown,Pencil } from 'lucide-vue-next'
 import Chart from './Chart.vue'
 import AlcoholEstimate from './AlcoholEstimate.vue'
 import AssociationSummary from './AssociationSummary.vue'
 import { state } from '../api'
-import {recordName,recordCostLabel} from '../productPricing'
-import { money,number,shortTime,shortDate } from '../types'
-import type { Row } from '../types'
-const props=defineProps<{from:string;to:string;days:number}>();const emit=defineEmits<{record:[kind:'smoking'|'alcohol'|'intimacy'];quick:[kind:'smoking'|'intimacy'];view:[page:string];repair:[detail:Record<string,any>];edit:[row:Row,collection:string]}>()
-const chartKind=ref('smoking')
-const today=computed(()=>props.to),total=computed(()=>state.analytics.totals||{}),daily=computed(()=>state.analytics.daily||[]),alcohol=computed(()=>state.analytics.alcohol||{})
-const lifetime=computed(()=>state.lifetimeSummary?.totals||{})
-const lifetimeRange=computed(()=>state.lifetimeLoading?'正在读取历史汇总…':state.lifetimeError?'历史汇总暂不可用':state.lifetimeSummary?.from?`${shortDate(state.lifetimeSummary.from)} 至 ${shortDate(state.lifetimeSummary.to)}`:'尚无历史记录')
-const association=computed(()=>state.analytics.associations||{})
-const health=computed(()=>state.health?.length?state.health:(state.collections.health||[]))
-const rangeRows=(c:string)=>(state.collections[c]||[]).filter(r=>String(r.occurredAt||r.startedAt||'').slice(0,10)>=props.from&&String(r.occurredAt||r.startedAt||'').slice(0,10)<=props.to)
-const activity=computed<any[]>(()=>[...rangeRows('smoking').map(r=>({...r,_kind:'smoking'})),...rangeRows('drinks').map(r=>({...r,_kind:'drinks'})),...rangeRows('intimacy').map(r=>({...r,_kind:'intimacy'}))].sort((a:any,b:any)=>String(b.occurredAt).localeCompare(String(a.occurredAt))).slice(0,5))
-const chartMetric=computed(()=>chartKind.value==='smoking'?{key:'smokingCount',label:'根',color:'#a8e6ba',complete:'SMOKING',has:'hasSmokingRecords'}:chartKind.value==='alcohol'?{key:'ethanolEquivalent42Ml',label:'ml',color:'#9aabff',complete:'ALCOHOL',has:'hasAlcoholRecords'}:{key:'intimacyCount',label:'次',color:'#e5a7cc',complete:'INTIMACY',has:'hasIntimacyRecords'})
-const chartOption=computed<any>(()=>({animation:!state.settings.reducedMotion,backgroundColor:'transparent',grid:{left:43,right:18,top:26,bottom:30},tooltip:{trigger:'axis',backgroundColor:'#24262f',borderColor:'#3b3e4b',textStyle:{color:'#f4f4f5'},formatter:(p:any)=>`${p[0].axisValue}<br/>${p[0].value==null?'资料待补':`${p[0].value} ${chartMetric.value.label}`}`},xAxis:{type:'category',data:daily.value.map(d=>String(d.date).slice(5).replace('-','/')),axisLine:{lineStyle:{color:'#30313a'}},axisTick:{show:false},axisLabel:{color:'#777b89',fontSize:11}},yAxis:{type:'value',minInterval:chartKind.value==='alcohol'?undefined:1,axisLabel:{color:'#777b89',fontSize:11},splitLine:{lineStyle:{color:'#282a33',type:'dashed'}},name:chartMetric.value.label,nameTextStyle:{color:'#777b89'}},series:[{type:'line',smooth:0.35,connectNulls:false,symbol:'circle',symbolSize:5,data:daily.value.map(d=>d[chartMetric.value.key]),lineStyle:{color:chartMetric.value.color,width:2.5},itemStyle:{color:chartMetric.value.color},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:chartMetric.value.color+'38'},{offset:1,color:chartMetric.value.color+'00'}]}}}]}))
-const calendar=computed(()=>{const end=new Date(props.to+'T12:00:00'),arr:any[]=[];end.setDate(end.getDate()+(7-end.getDay())%7);for(let i=34;i>=0;i--){const d=new Date(end);d.setDate(d.getDate()-i);const date=[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');const n=['smoking','drinks','intimacy'].reduce((sum,key)=>sum+(state.collections[key]||[]).filter(r=>String(r.occurredAt||'').startsWith(date)).length,0);const emptySessions=(state.collections.sessions||[]).filter(r=>String(r.startedAt||'').startsWith(date)&&!(state.collections.drinks||[]).some(drink=>drink.sessionId===r.id&&String(drink.occurredAt||'').startsWith(date))).length;const records=n+emptySessions;arr.push({date,day:d.getDate(),n:records,recorded:records>0,future:date>props.to})}return arr})
+import HomeDayReview from './HomeDayReview.vue'
+import HomeMomentList, { type HomeMoment } from './HomeMomentList.vue'
+import { localNow,money,number,shortDate,privateActivityLabels } from '../types'
+import type { Row,PrivateActivityType,TrendPoint } from '../types'
+
+type Scope = '7' | '30' | 'all'
+const props = defineProps<{ from: string; to: string; days: number; quickSaving: boolean; scope: Scope; selectedDate: string; loading: boolean }>()
+const emit = defineEmits<{
+  record: [kind: 'smoking' | 'alcohol' | 'intimacy']; quick: [activityType: PrivateActivityType];
+  view: [page: string]; repair: [detail: Record<string,any>]; edit: [row: Row, collection: string];
+  scope: [value: Scope]; selectDay: [date: string]; month: [date: string]
+}>()
+const scopes = [{ value: '7', label: '近 7 天' }, { value: '30', label: '近 30 天' }, { value: 'all', label: '累计' }] as const
+const series = {
+  smoking: {key: 'smokingCount', title: '吸烟', unit: '根', dark: '#a8e6ba', light: '#36734d'},
+  alcohol: {key: 'ethanolEquivalent42Ml', title: '饮酒（42°）', unit: 'ml', dark: '#9aabff', light: '#536bc5'},
+  intimacy: {key: 'intimacyCount', title: '私人', unit: '次', dark: '#e5a7cc', light: '#a15384'}
+} as const
+const chartKind = ref<keyof typeof series>('smoking')
+const analytics = computed(() => state.analytics.from === props.from && state.analytics.to === props.to ? state.analytics : null)
+const daily = computed(() => analytics.value?.daily || [])
+const alcohol = computed(() => analytics.value?.alcohol || {})
+const isLifetime = computed(() => props.scope === 'all')
+const total = computed(() => (isLifetime.value ? state.lifetimeSummary.totals : analytics.value?.totals) || {})
+const rangeLabel = computed(() => isLifetime.value
+  ? `${props.from.slice(0,4)} 年 ${Number(props.from.slice(5,7))} 月`
+  : `近 ${props.scope} 天`)
+const summaryDates = computed(() => {
+  if (!isLifetime.value) return shortDate(props.from) + ' — ' + shortDate(props.to)
+  if (state.lifetimeSummary.from) return shortDate(state.lifetimeSummary.from) + ' — ' + shortDate(state.lifetimeSummary.to)
+  return state.lifetimeSummary.totals ? '尚无历史记录' : ''
+})
+const windowError = computed(() => analytics.value && !analytics.value.daily ? analytics.value.warnings?.join(' ') || '' : '')
+const summaryError = computed(() => isLifetime.value ? state.lifetimeError : windowError.value)
+const summaryPending = computed(() => !summaryError.value && !(isLifetime.value ? state.lifetimeSummary.totals : analytics.value?.totals))
+const reviewedAt = ref(localNow())
+watch(() => state.analytics, () => { reviewedAt.value = localNow() })
+const moments = computed(() => {
+  const dates = new Map<string, HomeMoment[]>()
+  const now = reviewedAt.value
+  const drinks = (state.collections.drinks || []).filter(row => row.occurredAt && row.occurredAt <= now)
+  const sessionDays = new Set(drinks.map(row => row.sessionId + ':' + String(row.occurredAt).slice(0, 10)))
+  for (const kind of ['smoking', 'drinks', 'intimacy', 'sessions'] as const) {
+    for (const row of state.collections[kind] || []) {
+      const at = String(row.occurredAt || row.startedAt || '')
+      const date = at.slice(0, 10)
+      if (!date || date < props.from || date > props.to || at > now || (kind === 'sessions' && sessionDays.has(row.id + ':' + date))) continue
+      const entries = dates.get(date) ?? []
+      entries.push({ row, kind, at })
+      dates.set(date, entries)
+    }
+  }
+  return dates
+})
+const recent = computed(() => [...moments.value.values()].flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5))
+const dayEntries = computed(() => [...(moments.value.get(props.selectedDate) || [])].sort((a, b) => b.at.localeCompare(a.at)))
+const chartMetric = computed(() => series[chartKind.value])
+const chartColor = computed(() => state.settings.theme === 'light' ? chartMetric.value.light : chartMetric.value.dark)
+const trendPoints = computed<TrendPoint[]>(() => isLifetime.value ? state.lifetimeSummary.trend?.points || [] : daily.value)
+const trendUnit = computed(() => isLifetime.value ? state.lifetimeSummary.trend?.unit || 'day' : 'day')
+const trendTitle = computed(() => isLifetime.value ? '全部历史趋势' : rangeLabel.value + '趋势')
+const trendCaption = computed(() => {
+  if (!isLifetime.value || !trendPoints.value.length) return ''
+  const unitLabel = {day:'按日', month:'按月', year:'按年'}[trendUnit.value]
+  return summaryDates.value + ' · ' + unitLabel + '统计'
+})
+const trendStatus = computed(() => {
+  if (summaryError.value) return '趋势暂时无法读取'
+  if (summaryPending.value) return '正在读取趋势…'
+  if (isLifetime.value && !state.lifetimeSummary.from) return '尚无历史行为记录'
+  return trendPoints.value.length ? '' : '趋势暂时无法读取'
+})
+const chartOption = computed(() => {
+  const gridColor = state.settings.theme === 'light' ? '#dce2de' : '#333640'
+  const labelColor = state.settings.theme === 'light' ? '#606e65' : '#98a1ae'
+  const points = trendPoints.value
+  const history = isLifetime.value
+  const unit = trendUnit.value
+  const dates = points.map(({date}) => {
+    if (!history) return date.slice(5).replace('-', '/')
+    if (unit === 'month') return date.slice(0, 7)
+    if (unit === 'year') return date.slice(0, 4)
+    return date
+  })
+  const historyTicks = history && dates.length > 7
+    ? new Set(Array.from({length: 5}, (_, i) => Math.round(i * (dates.length - 1) / 4)))
+    : undefined
+  return {
+    animation: !state.settings.reducedMotion,
+    grid: {left: 42, right: history ? 32 : 16, top: 22, bottom: history && unit === 'day' ? 42 : 26},
+    tooltip: {
+      trigger: 'axis' as const, valueFormatter: (value: unknown) => value == null ? '资料待补' : `${value} ${chartMetric.value.unit}`
+    },
+    xAxis: {
+      type: 'category' as const,
+      data: dates, axisLine: {lineStyle: {color: gridColor}}, axisTick: {show: false},
+      axisLabel: {
+        color: labelColor, fontSize: 11, hideOverlap: true,
+        interval: historyTicks ? (index: number) => historyTicks.has(index) : undefined,
+        showMinLabel: history || undefined, showMaxLabel: history || undefined,
+        formatter: history && unit === 'day' ? (value: string) => value.slice(0, 4) + '\n' + value.slice(5).replace('-', '/') : undefined
+      }
+    },
+    yAxis: {
+      type: 'value' as const, minInterval: chartKind.value === 'alcohol' ? undefined : 1,
+      axisLabel: {color: labelColor, fontSize: 11}, splitLine: {lineStyle: {color: gridColor, type: 'dashed' as const}}
+    },
+    series: [{
+      name: chartMetric.value.title, type: 'line' as const, connectNulls: false, symbolSize: points.length > 45 ? 3 : 6,
+      data: points.map(point => point[chartMetric.value.key]), lineStyle: {color: chartColor.value, width: 2},
+      itemStyle: {color: chartColor.value}, areaStyle: {opacity: 0.07, color: chartColor.value}
+    }]
+  }
+})
 const priceMissing=computed(()=>(Number(total.value.smokingUnknownCostCount)||0)+(Number(total.value.alcoholUnknownCostCount)||0))
-const lifetimePriceMissing=computed(()=>Number(lifetime.value.smokingUnknownCostCount||0)+Number(lifetime.value.alcoholUnknownCostCount||0))
-function displayCount(value:any,key:string,historical=false){return value!=null?number(value):'—'}
-function costValue(historical=false){const value=historical?lifetime.value:total.value;return value.consumptionCost??null}
-function itemLabel(r:any){return r._kind==='smoking'?`${recordName(r.snapshotName,'未选种类')} · ${r.count} 根`:r._kind==='drinks'?`${recordName(r.snapshotName,'未选种类')} · ${r.actualMl==null?'待补用量':number(r.actualMl)+' ml'}`:`一次私人记录 · ${r.count||1} 次`}
-function linkLabel(id:string,kind:string){const link=(kind==='smoking'?state.analytics.smokingLinks:state.analytics.links)?.[id];return link?.source==='MANUAL'?`本人确认：${link.effective==='YES'?'酒后':link.effective==='NO'?'非酒后':'不确定'}`:link?.status==='DURING_DRINKING'?'饮酒期间':link?.status==='POSSIBLE_AFTER_DRINKING'?'估算酒后时段':link?.status==='RECENT_RECORDED_DRINKING'?'近期有饮酒记录':link?.status==='INSUFFICIENT_DATA'?'酒后状态不确定':'饮酒关联待判断'}
+function displayCount(value:unknown){return value!=null?number(value):'—'}
+function openMoment(moment: HomeMoment) {
+  if (moment.kind === 'sessions') emit('repair', {collection: 'sessions', id: moment.row.id})
+  else emit('edit', moment.row, moment.kind)
+}
 </script>
-<template><div class="dashboard">
-<section class="welcome-banner compact-welcome"><div class="welcome-copy"><span class="welcome-symbol"><Activity :size="23" :stroke-width="1.5"/></span><div><h2>留意近况，<span>照顾自己。</span></h2><p>如实记录，也留意感受与休息。</p></div></div><div class="welcome-meta"><span><ShieldCheck :size="14"/>仅在本机</span><span>按自己的节奏</span></div></section>
+<template>
+<div class="dashboard">
+  <section class="week-summary panel" aria-labelledby="week-heading">
+    <header class="week-header">
+      <div class="summary-title"><h2 id="week-heading">行为概览</h2><span>{{ summaryDates }}</span></div>
+      <div role="group" class="segmented scope-tabs" aria-label="概览统计范围">
+        <button v-for="period in scopes" :key="period.value" :class="{active: scope === period.value}"
+          :aria-pressed="scope === period.value" @click="emit('scope', period.value)">{{ period.label }}</button>
+      </div>
+    </header>
+    <p v-if="summaryError" class="summary-status error-box" role="alert">{{ summaryError }}</p>
+    <p v-else-if="summaryPending" class="summary-status muted small" role="status">正在读取概览…</p>
+    <div class="week-values" :aria-busy="summaryPending">
+      <article>
+        <h3><Cigarette :size="16"/>吸烟</h3>
+        <strong class="week-value sensitive">{{displayCount(total.smokingCount)}} <small>根</small></strong>
+        <p v-if="total.smokingCount != null" class="sensitive">按用量估算 {{money(total.smokingCost)}}</p>
+        <button class="week-action" @click="emit('record','smoking')"><Plus :size="14"/>记吸烟</button>
+      </article>
+      <article>
+        <h3><Wine :size="16"/>饮酒</h3>
+        <strong class="week-value sensitive">{{displayCount(total.alcoholMl)}} <small>ml</small></strong>
+        <p v-if="total.alcoholSessions != null" class="sensitive">{{displayCount(total.alcoholSessions)}} 次 · 折合 42° 白酒 {{displayCount(total.ethanolEquivalent42Ml)}} ml<template v-if="total.alcoholUnknownEthanolCount"> · {{total.alcoholUnknownEthanolCount}} 条待补饮用资料</template></p>
+        <button class="week-action" @click="emit('record','alcohol')"><Plus :size="14"/>记饮酒</button>
+      </article>
+      <article>
+        <h3><Heart :size="16"/>私人记录</h3>
+        <strong class="week-value sensitive">{{displayCount(total.intimacyCount)}} <small>次</small></strong>
+        <p v-if="total.intimacyCount != null" class="sensitive">自慰 {{displayCount(total.masturbationCount)}} 次 · 性生活 {{displayCount(total.sexCount)}} 次</p>
+        <div class="week-action-row">
+          <button v-for="(label,type) in privateActivityLabels" :key="type" class="week-action" :disabled="quickSaving"
+            :aria-label="`快速记录一次${label}`" :title="`快速记录一次${label}`" @click="emit('quick',type)"><Plus :size="13"/>{{label}}</button>
+          <button class="week-detail" title="填写私人记录详情" aria-label="填写私人记录详情" @click="emit('record','intimacy')"><Pencil :size="15"/></button>
+        </div>
+      </article>
+      <article>
+        <h3><Wallet :size="16"/>烟酒估算费用</h3>
+        <strong class="week-value sensitive"><small>¥</small> {{total.consumptionCost == null ? '—' : number(total.consumptionCost,2)}}</strong>
+        <p v-if="priceMissing" class="sensitive">{{priceMissing}} 条待补价格，仅计已知费用</p>
+        <p v-else-if="total.consumptionCost != null" class="sensitive">烟 {{money(total.smokingCost)}} · 酒 {{money(total.alcoholCost)}}</p>
+        <details v-if="isLifetime" class="cost-disclosure"><summary>计算依据</summary><p>烟按根数分摊每包单价，酒按饮用量分摊每瓶单价。累计金额为各笔已知费用之和。</p></details>
+        <button v-else class="week-detail" @click="emit('view','analytics')">计算依据 <ArrowUpRight :size="14"/></button>
+      </article>
+    </div>
+  </section>
 
-<section class="weekly-overview" aria-label="最近七天概览"><header class="weekly-heading"><h3>最近 7 天</h3><span>{{shortDate(from)}} 至 {{shortDate(to)}} · 含今天</span></header><div class="metric-grid compact-metrics weekly-metrics">
-<button class="metric-card" @click="emit('view','history')"><div class="metric-top"><span>近 7 天吸烟</span><Cigarette :size="17"/></div><div class="metric-number sensitive">{{displayCount(total.smokingCount,'SMOKING')}}<small>根</small></div><div class="metric-subline sensitive">按用量计费 {{money(total.smokingCost)}}</div><div class="metric-foot"><span>按已记录根数汇总</span><ArrowUpRight :size="15"/></div></button>
-<button class="metric-card" @click="emit('view','analytics')"><div class="metric-top"><span>近 7 天饮酒</span><Wine :size="17"/></div><div class="metric-number sensitive">{{displayCount(total.alcoholMl,'ALCOHOL')}}<small>ml</small></div><div class="metric-subline alcohol-equivalent sensitive">折合 42° 白酒 <strong>{{total.ethanolEquivalent42Ml==null?'—':number(total.ethanolEquivalent42Ml)}}</strong> ml</div><div class="metric-foot"><span class="small-dot alcohol"></span><span class="sensitive">{{displayCount(total.alcoholSessions,'ALCOHOL')}} 次饮酒 · 按纯酒精量换算</span><ArrowUpRight :size="15"/></div></button>
-<button class="metric-card" @click="emit('view','history')"><div class="metric-top"><span>近 7 天私人记录</span><Heart :size="17"/></div><div class="metric-number sensitive">{{displayCount(total.intimacyCount,'INTIMACY')}}<small>次</small></div><div class="metric-subline sensitive">{{association.intimacy?.totalEvents?('其中 '+number(association.intimacy.relatedEvents,0)+' 条与饮酒相关'):'记录后查看饮酒关联'}}</div><div class="metric-foot"><span>留意感受与休息</span><ArrowUpRight :size="15"/></div></button>
-<button class="metric-card" @click="emit('view','analytics')"><div class="metric-top"><span>近 7 天烟酒花费</span><Wallet :size="17"/></div><div class="metric-number sensitive"><small class="currency">¥</small>{{costValue()==null?'—':number(costValue(),2)}}</div><div class="metric-subline sensitive">烟 {{money(total.smokingCost)}} · 酒 {{money(total.alcoholCost)}}</div><div class="metric-foot"><span>{{priceMissing?priceMissing+' 条费用待补，显示已知部分':'按种类单价 × 本人用量'}}</span><ArrowUpRight :size="15"/></div></button>
-</div><p class="weekly-note">未记录的日期按 0 统计；之后补记会自动更新。</p></section>
-<div class="quick-grid"><div class="quick-card smoking"><div class="quick-icon"><Cigarette :size="22"/></div><div><h3>吸烟</h3><p>选择种类，按根数计费</p></div><button class="quick-plus" aria-label="选择种类并记录吸烟" title="先选择香烟种类" @click="emit('record','smoking')"><Plus :size="22"/></button><button class="quick-detail" title="详细记录吸烟" @click="emit('record','smoking')"><ChevronRight :size="18"/></button></div><div class="quick-card alcohol"><div class="quick-icon"><Wine :size="22"/></div><div><h3>饮酒</h3><p>选择酒品，记录本人饮用量</p></div><button class="quick-plus" aria-label="记录饮酒" @click="emit('record','alcohol')"><Plus :size="22"/></button></div><div class="quick-card intimacy"><div class="quick-icon"><Heart :size="22"/></div><div><h3>私人记录</h3><p>留意感受，也留意休息</p></div><button class="quick-plus" aria-label="快速记录一次自慰" @click="emit('quick','intimacy')"><Plus :size="22"/></button><button class="quick-detail" title="详细记录自慰" @click="emit('record','intimacy')"><ChevronRight :size="18"/></button></div></div>
-<AssociationSummary compact @details="emit('view','analytics')"/>
-<div class="dashboard-main"><section class="panel trend-panel"><header class="panel-header"><div><span class="eyebrow">PATTERNS OVER TIME</span><h3>最近 7 天的变化</h3></div><div class="segmented chart-tabs"><button :class="{active:chartKind==='smoking'}" @click="chartKind='smoking'">吸烟</button><button :class="{active:chartKind==='alcohol'}" @click="chartKind='alcohol'">饮酒（42°）</button><button :class="{active:chartKind==='intimacy'}" @click="chartKind='intimacy'">私人</button></div></header><div class="chart-wrap sensitive"><Chart :option="chartOption" :label="`最近${days}天${chartKind==='smoking'?'吸烟':chartKind==='alcohol'?'饮酒折合42度白酒':'私人行为'}记录`"/></div><footer class="chart-footer"><span><span class="legend-line"></span>{{chartKind==='alcohol'?'折合42°白酒毫升数':'已记录数据'}}</span><span>未记录按 0；已有记录缺少资料时显示待补</span></footer></section>
-<AlcoholEstimate compact @view="emit('view',$event)" @repair="emit('repair',$event)"/></div>
-<div class="dashboard-bottom"><section class="panel calendar-panel"><header class="panel-header"><div><span class="eyebrow">RECORD CALENDAR</span><h3>记录日历 · 最近 5 周</h3></div><span class="muted small">{{shortDate(to)}}</span></header><div class="calendar-week"><span v-for="d in ['一','二','三','四','五','六','日']" :key="d">{{d}}</span></div><div class="heatmap sensitive"><button v-for="d in calendar" :key="d.date" :class="{recorded:d.recorded,'zero-day':!d.recorded&&!d.future,today:d.date===today,future:d.future}" :disabled="d.future" :title="`${d.date} · ${d.future?'未来日期':d.recorded?d.n+' 条记录':'0 次（未记录）'}`" @click="emit('view','history')">{{d.day}}<small v-if="!d.recorded&&!d.future" class="calendar-zero">0</small></button></div><div class="heatmap-legend"><span><i class="zero-day"></i>未记录 · 按 0</span><span><i class="recorded"></i>有记录</span><span><i></i>未来日期</span></div><p class="calendar-zero-note">没有记录时自动计为 0，无需每天确认。</p></section>
-<section class="panel timeline-panel"><header class="panel-header"><div><span class="eyebrow">RECENT MOMENTS</span><h3>最近记录</h3></div><button class="text-link" @click="emit('view','history')">全部 <ArrowUpRight :size="15"/></button></header><div v-if="!activity.length" class="empty-state compact"><Clock3 :size="30"/><strong>最近 7 天暂无记录</strong><p>需要补记时，可以填写实际发生时间。</p></div><div v-else class="timeline"><button v-for="r in activity" :key="r.id" class="timeline-row" @click="emit('edit',r,r._kind)"><span class="timeline-symbol" :class="r._kind==='drinks'?'alcohol':r._kind"><Cigarette v-if="r._kind==='smoking'" :size="16"/><Wine v-else-if="r._kind==='drinks'" :size="16"/><Heart v-else :size="16"/></span><div class="timeline-content"><strong class="sensitive">{{itemLabel(r)}}</strong><span>{{shortDate(r.occurredAt)}} · {{r.timePrecision==='DATE'?'仅记日期':r.timePrecision==='APPROX'?'约 '+String(r.occurredAt).slice(11,13)+' 点':shortTime(r.occurredAt)}}<template v-if="r._kind!=='drinks'"> · {{linkLabel(r.id,r._kind)}}</template></span></div><span class="timeline-cost sensitive">{{r._kind==='intimacy'?'已记录':recordCostLabel(r,r._kind)}}</span></button></div></section></div>
-<div class="insight-strip"><span class="insight-icon"><BookOpen :size="20"/></span><div><strong>{{health[0]?.title||'记录是了解自己的开始'}}</strong><p>{{health[0]?.body||'没记全也没关系。补齐实际发生的情况，让下一次回看更清楚。'}}</p></div><a v-if="health[0]?.sourceUrl" :href="health[0].sourceUrl" target="_blank" rel="noopener noreferrer" class="text-link">查看来源 <ArrowUpRight :size="15"/></a></div>
-<div v-if="priceMissing" class="hint"><Info :size="15"/> 最近 7 天有 {{priceMissing}} 条记录缺少价格，费用只显示已知小计。</div>
-<details class="history-summary panel">
-<summary><span><strong>历史累计</strong><small>{{lifetimeRange}}</small></span><span class="history-summary-action"><span class="history-expand">展开查看</span><span class="history-collapse">收起</span><ChevronDown :size="16"/></span></summary>
-<div class="history-summary-body"><p class="history-summary-note">汇总历史记录，未记录日期按 0；已有记录缺少价格或饮用量时仍标为待补。</p>
-<p v-if="state.lifetimeLoading" class="muted small">正在读取历史汇总…</p><p v-else-if="state.lifetimeError" class="error-box" role="alert">{{state.lifetimeError}}</p>
-<div v-else class="history-totals sensitive">
-<div><span>吸烟累计</span><strong>{{displayCount(lifetime.smokingCount,'SMOKING',true)}}<small> 根</small></strong></div>
-<div><span>饮酒累计</span><strong>{{displayCount(lifetime.alcoholMl,'ALCOHOL',true)}}<small> ml</small></strong><small>{{displayCount(lifetime.alcoholSessions,'ALCOHOL',true)}} 次饮酒 · 折合 42° 白酒 {{lifetime.ethanolEquivalent42Ml==null?'—':number(lifetime.ethanolEquivalent42Ml)}} ml</small></div>
-<div><span>私人记录累计</span><strong>{{displayCount(lifetime.intimacyCount,'INTIMACY',true)}}<small> 次</small></strong></div>
-<div><span>烟酒费用累计</span><strong>{{costValue(true)==null?'—':money(costValue(true))}}</strong><small>按用量计费{{lifetimePriceMissing?' · '+lifetimePriceMissing+' 条费用待补，显示已知部分':''}}</small></div>
-</div></div></details>
-<div class="dashboard-foot"><span>自记 · 认真记录，温柔对待自己</span><span><i class="online-dot"></i>本机数据 · {{state.loading?'正在更新':'已连接'}}</span></div>
-</div></template>
+  <HomeDayReview :from="from" :to="to" :selected-date="selectedDate" :daily="daily" :scope="scope"
+    :earliest="state.lifetimeSummary.from || null" :loading="loading && !windowError" :error="windowError"
+    @select="emit('selectDay', $event)" @month="emit('month', $event)">
+    <HomeMomentList v-if="dayEntries.length" class="day-list" :entries="dayEntries" @open="openMoment"/>
+  </HomeDayReview>
 
-<style scoped>.heatmap button{position:relative}.heatmap button.zero-day{color:var(--muted)}.calendar-zero{position:absolute;right:3px;bottom:2px;font-size:7px;line-height:1;color:var(--subtle)}.heatmap-legend i.zero-day{background:var(--panel-soft)}.calendar-zero-note{font-size:10px;color:var(--muted);line-height:1.7;margin:0 24px 18px}</style>
+  <div class="overview-panels">
+    <section class="panel trend-panel">
+      <header class="panel-header">
+        <div><h3>{{ trendTitle }}</h3><p v-if="trendCaption" class="trend-caption">{{ trendCaption }}</p></div>
+        <div class="segmented chart-tabs" aria-label="趋势指标">
+          <button v-for="(metric, kind) in series" :key="kind" :class="{active:chartKind===kind}"
+            :aria-pressed="chartKind===kind" @click="chartKind=kind">{{metric.title}}</button>
+        </div>
+      </header>
+      <div v-if="trendStatus" class="chart-status muted small" role="status">{{ trendStatus }}</div>
+      <div v-else class="chart-wrap sensitive"><Chart :option="chartOption" :label="[trendTitle,chartMetric.title,trendCaption].filter(Boolean).join(' · ')"/></div>
+      <footer class="chart-footer"><span><i class="legend-line" :style="{background:chartColor}"></i>{{chartKind==='alcohol'?'折合 42° 白酒（ml）':chartKind==='intimacy'?'私人记录（次）':'吸烟（根）'}}</span><span>未记录按 0<template v-if="chartKind==='alcohol'">，仅折算已知酒量</template></span></footer>
+    </section>
+
+    <section class="panel recent-panel">
+      <header class="panel-header">
+        <h3>最近记录 <small>{{ rangeLabel }}</small></h3>
+        <button class="text-link" @click="emit('view','history')">全部记录 <ArrowUpRight :size="14"/></button>
+      </header>
+      <HomeMomentList v-if="recent.length" class="recent-list" :entries="recent" show-date @open="openMoment"/>
+      <div v-else class="empty-state compact"><Clock3 :size="23"/><strong>这段时间没有行为记录</strong></div>
+    </section>
+  </div>
+  <div v-if="analytics?.associations" class="range-associations">
+    <p class="association-scope">关联统计 · {{ rangeLabel }}</p>
+    <AssociationSummary compact @details="emit('view','analytics')"/>
+  </div>
+  <details v-if="alcohol.status==='ESTIMATE'||alcohol.status==='INSUFFICIENT_DATA'" class="history-summary panel estimate-disclosure">
+    <summary><span><strong>最近一次饮酒估算</strong><small>{{alcohol.status==='INSUFFICIENT_DATA'?'有资料待补': '模型时长与计算依据'}}</small></span><ChevronDown :size="16"/></summary>
+    <AlcoholEstimate compact @view="emit('view',$event)" @repair="emit('repair',$event)"/>
+  </details>
+</div>
+</template>
+
+<style scoped>
+.week-summary { margin-bottom: 16px; overflow: hidden; }
+.week-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 15px 20px; border-bottom: 1px solid var(--border); }
+.week-header h2, .panel-header h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.summary-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.summary-title span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.scope-tabs button { min-height: 30px; padding: 4px 12px; font-size: 12px; }
+.scope-tabs button.active { color: var(--mint); background: var(--mint-bg); }
+.summary-status { margin: 12px 20px 0; }
+.cost-disclosure { margin-top: auto; font-size: 12px; color: var(--muted); }
+.cost-disclosure summary { display: list-item; padding: 6px 0; cursor: pointer; }
+.cost-disclosure p { margin-bottom: 2px; }
+.week-values { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.week-values article { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding: 16px 20px 14px; }
+.week-values article + article { border-left: 1px solid var(--border); }
+.week-values h3 { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); font-weight: 500; }
+.week-values h3 svg { color: var(--muted); }
+.week-value { margin: 6px 0 3px; font-size: clamp(22px, 2.1vw, 30px); font-weight: 550; line-height: 1.3; letter-spacing: -.03em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.week-value small { color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: normal; }
+.week-values p { margin: 0 0 9px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.week-action-row { display: flex; align-items: center; gap: 9px; margin-top: auto; flex-wrap: wrap; }
+.week-action, .week-detail { display: inline-flex; gap: 4px; align-items: center; margin-top: auto; min-height: 30px; font-size: 12px; font-weight: 500; }
+.week-action { background: var(--panel-soft); border: 1px solid var(--border); color: var(--text); padding: 3px 9px; border-radius: 6px; }
+.week-detail { padding: 3px 0; color: var(--muted); }
+.week-action:hover, .week-detail:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.overview-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 20px; }
+.overview-panels .panel { min-width: 0; min-height: 0; }
+.overview-panels .panel-header { align-items: center; flex-wrap: wrap; padding: 16px 18px 6px; gap: 10px; }
+.chart-wrap { height: 212px; }
+.trend-caption { margin: 4px 0 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-footer { font-size: 10px; color: var(--muted); flex-wrap: wrap; padding: 4px 18px 14px; }
+.chart-tabs button { font-size: 11px; padding: 5px 7px; }
+.recent-list { margin: 0 18px 6px; }
+.day-list { max-height: 270px; overflow-y: auto; }
+.recent-panel h3 small { margin-left: 5px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.chart-status { min-height: 212px; display: grid; place-items: center; }
+.association-scope { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+.estimate-disclosure :deep(.alcohol-reference) { border-width: 1px 0 0; border-radius: 0; }
+.dashboard :is(button, summary):focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+@media (max-width: 1000px) {
+  .week-values article { padding: 12px; }
+  .overview-panels { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+}
+@media (max-width: 760px) {
+  .week-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .week-values article:nth-child(3) { border-left: 0; }
+  .week-values article:nth-child(n+3) { border-top: 1px solid var(--border); }
+  .overview-panels { grid-template-columns: minmax(0, 1fr); }
+  .week-action, .week-detail { min-height: 36px; }
+}
+@media (max-width: 470px) {
+  .week-header { padding: 12px; gap: 6px; flex-wrap: wrap; }
+  .summary-title span { font-size: 11px; }
+  .overview-panels .panel-header { padding: 14px 12px 6px; }
+  .chart-tabs button { font-size: 10px; }
+  .recent-list { margin-inline: 12px; }
+}
+</style>

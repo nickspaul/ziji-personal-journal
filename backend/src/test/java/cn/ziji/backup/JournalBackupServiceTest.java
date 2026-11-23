@@ -34,6 +34,18 @@ class JournalBackupServiceTest {
     private Map<String,Object> task(){var row=row();row.putAll(Map.of("title","项目 A 联调","status","DONE","completedDate","2025-10-20","important",true,"tags",List.of("项目 a")));return row;}
     private Map<String,Object> journal(Map<String,Object> task){var row=row();row.putAll(Map.of("title","联调已经完成","startDate","2025-10-20","endDate","2025-10-20","timeMode","EXACT","startTime","14:15","endTime","15:45","people",List.of("Alice","小王"),"tags",List.of("项目 a"),"taskId",task.get("id")));return row;}
     private Map<String,Object> backup(Map<String,Object> collections){return new LinkedHashMap<>(Map.of("format","ziji-backup","schemaVersion",1,"collections",collections));}
+    @Test void manualCashflowRoundTripsInBackupAndStaysOutOfBehaviorStatistics() {
+        var expense = data.create("ledger", Map.of("date","2025-10-20","category","晚餐","amount","12.30"));
+        var income = data.create("ledger", Map.of("date","2025-10-20","direction","INCOME","category","报销","amount","8.25"));
+        verify(repository,never()).list(anyString(),any());
+        assertFalse(data.state().containsKey("ledger"));
+        var exported=service.export();
+        store.values().forEach(Map::clear);
+        assertEquals(2,service.restore(exported,"merge").get("imported"));
+        assertEquals(expense,store.get("ledger").get(expense.get("id")));
+        assertEquals(income,store.get("ledger").get(income.get("id")));
+        assertEquals(0,service.restore(exported,"merge").get("imported"));
+    }
     @Test void legacyBackupWithoutNewCollectionsStillRestores(){
         var old=row();old.putAll(Map.of("measuredAt","2025-10-20T21:00:00","heightCm",172,"weightKg",68.5,"sex","UNSPECIFIED"));
         var backup=backup(Map.of("body",List.of(old)));assertEquals(true,service.preview(backup).get("valid"));

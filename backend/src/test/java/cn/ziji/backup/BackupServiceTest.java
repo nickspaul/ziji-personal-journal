@@ -49,4 +49,56 @@ class BackupServiceTest {
         assertEquals(false,service.preview(b).get("valid"));
     }
     @Test void acceptsApproximateDrinkTimeInBackup(){var b=backup();drink(b).put("timePrecision","APPROX");assertEquals(true,service.preview(b).get("valid"));}
+
+    @Test void restoresBothLegacyAndExplicitPrivateTypesWithoutChangingMetadata() {
+        var legacy=row();
+        legacy.putAll(Map.of("occurredAt","2026-10-22T10:00","timePrecision","DATE","count",3,"manualAlcohol","AUTO","deleted",true));
+        var sex=new LinkedHashMap<>(legacy);
+        sex.putAll(Map.of("id",UUID.randomUUID().toString(),"activityType","SEX","deleted",false));
+        var snapshot=Map.<String,Object>of("format","ziji-backup","schemaVersion",1,
+            "collections",Map.of("intimacy",List.of(legacy,sex)));
+        assertEquals(true,service.preview(snapshot).get("valid"));
+        assertEquals(2,service.restore(snapshot,"merge").get("imported"));
+        verify(repository).insert(eq("intimacy"),argThat(r->legacy.get("id").equals(r.get("id"))
+            && Boolean.TRUE.equals(r.get("deleted")) && "3".equals(r.get("count").toString())
+            && "MASTURBATION".equals(r.get("activityType"))));
+        verify(repository).insert(eq("intimacy"),argThat(r->sex.get("id").equals(r.get("id"))
+            && Boolean.FALSE.equals(r.get("deleted")) && "SEX".equals(r.get("activityType"))));
+    }
+
+    @Test void retiredCollectionsAreNotAvailableForCrudOrNewExports(){
+        assertThrows(IllegalArgumentException.class,()->registry.require("completeness"));
+        assertThrows(IllegalArgumentException.class,()->registry.require("goals"));
+        var exported=(Map<?,?>)service.export().get("collections");
+        assertFalse(exported.containsKey("completeness"));assertFalse(exported.containsKey("goals"));
+    }
+    @SuppressWarnings("unchecked")
+    @Test void legacyBackupSkipsRetiredRowsAndStillRestoresUsefulMeasurements(){
+        var b=bodyBackup(true);var collections=new LinkedHashMap<>((Map<String,Object>)b.get("collections"));
+        collections.put("completeness",List.of(Map.of("date","2020-01-01","kind","SMOKING","complete",true)));
+        collections.put("goals",List.of(Map.of("kind","SMOKING","limitValue",10,"enabled",true)));
+        b.put("collections",collections);
+        var preview=service.preview(b);
+        assertEquals(true,preview.get("valid"));assertEquals(1,preview.get("newRecords"));assertEquals(2,preview.get("ignoredRecords"));
+        assertEquals(2,((List<?>)preview.get("warnings")).size());
+        assertEquals(1,service.restore(b,"merge").get("imported"));
+        verify(repository).insert(eq("body"),argThat(row->"68.5".equals(row.get("weightKg").toString())));
+        verify(repository,never()).insert(eq("completeness"),any());verify(repository,never()).insert(eq("goals"),any());
+    }
+    @Test void emptyRetiredCollectionsDoNotBlockOldBackups(){
+        var b=Map.<String,Object>of("format","ziji-backup","schemaVersion",1,"collections",Map.of("completeness",List.of(),"goals",List.of()));
+        var preview=service.preview(b);assertEquals(true,preview.get("valid"));assertEquals(0,preview.get("ignoredRecords"));assertEquals(List.of(),preview.get("warnings"));
+    }
+    @Test void unknownCollectionsAreStillRejected(){
+        var b=Map.<String,Object>of("format","ziji-backup","schemaVersion",1,"collections",Map.of("unknown_collection",List.of()));
+        assertThrows(IllegalArgumentException.class,()->service.preview(b));
+    }
+    @Test void retiredRowsCannotBypassRestoreSizeLimit(){
+        var b=Map.<String,Object>of("format","ziji-backup","schemaVersion",1,"collections",Map.of("goals",Collections.nCopies(100001,Map.of())));
+        assertThrows(IllegalArgumentException.class,()->service.preview(b));
+    }
+    @Test void retiredCollectionMustStillBeAnArray(){
+        var b=Map.<String,Object>of("format","ziji-backup","schemaVersion",1,"collections",Map.of("goals",Map.of()));
+        assertThrows(IllegalArgumentException.class,()->service.preview(b));
+    }
 }

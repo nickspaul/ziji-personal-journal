@@ -30,7 +30,6 @@ public final class BehaviorCalculator {
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private static final BigDecimal ETHANOL_DENSITY = new BigDecimal("0.789");
     private static final BigDecimal ETHANOL_PER_ML_42 = ETHANOL_DENSITY.multiply(new BigDecimal("0.42"));
-    private static final List<String> KINDS = List.of("SMOKING", "ALCOHOL", "INTIMACY");
     private static final String DISCLAIMER = "这是按已录入数据计算的简化情景范围，不是测量结果或可靠的个人上下界，不能证明酒精已清零、身体已恢复或可以驾驶。";
     private static final List<String> MODEL_SOURCES = List.of(
         "https://pubmed.ncbi.nlm.nih.gov/6986753/",
@@ -51,7 +50,8 @@ public final class BehaviorCalculator {
         "smokingKnownCoCount", "alcoholSessions", "alcoholBottles", "alcoholOpenedBottles", "alcoholUnknownBottleCount",
         "alcoholKnownBottleCount", "alcoholMl", "alcoholUnknownVolumeCount", "alcoholKnownVolumeCount",
         "ethanolGrams", "alcoholUnknownEthanolCount", "alcoholKnownEthanolCount", "alcoholCost", "alcoholUnknownCostCount",
-        "alcoholKnownCostCount", "intimacyCount", "alcoholRelatedIntimacyCount", "alcoholRelatedSmokingCount", "paidAmount");
+        "alcoholKnownCostCount", "intimacyCount", "masturbationCount", "sexCount",
+        "alcoholRelatedIntimacyCount", "alcoholRelatedSmokingCount", "paidAmount");
 
     public static Map<String, Object> enrich(String collection, Map<String, Object> input,
             Map<String, Object> previous, Map<String, List<Map<String, Object>>> state) {
@@ -307,7 +307,6 @@ public final class BehaviorCalculator {
             Map<String, Object> value = emptySums();
             value.put("date", day.toString());
             value.put("isFuture", day.isAfter(now.toLocalDate()));
-            value.put("completeness", completeness(state, day));
             value.put("hasSmokingRecords", false);
             value.put("hasAlcoholRecords", false);
             value.put("hasIntimacyRecords", false);
@@ -346,20 +345,17 @@ public final class BehaviorCalculator {
             Map<String, Object> day = day(days, row.get("occurredAt"));
             if (day == null) continue;
             day.put("hasIntimacyRecords", true);
-            BigDecimal count = decimal(row.getOrDefault("count", ONE));
-            add(day, "intimacyCount", count);
+            accumulateIntimacy(day, row);
             Map<String, Object> link = alcoholLink(row, state, settings, now);
             links.put(string(row.get("id")), link);
             addAssociation(intimacyAssociation, row, link);
-            if ("YES".equals(link.get("effective"))) add(day, "alcoholRelatedIntimacyCount", count);
+            if ("YES".equals(link.get("effective"))) add(day, "alcoholRelatedIntimacyCount", row.getOrDefault("count", ONE));
         }
         for (Map<String, Object> row : occurredRows(state, "purchases", "occurredAt", now)) {
             Map<String, Object> day = day(days, row.get("occurredAt"));
             if (day != null && !"OTHER".equals(string(row.get("payer")))) add(day, "paidAmount", row.get("amount"));
         }
         Map<String, Object> totals = emptySums();
-        Map<String, Object> completeDays = new LinkedHashMap<>();
-        KINDS.forEach(kind -> completeDays.put(kind, 0));
         long elapsedDays = 0;
         for (Map<String, Object> day : days.values()) {
             if (Boolean.TRUE.equals(day.get("isFuture"))) {
@@ -369,9 +365,6 @@ public final class BehaviorCalculator {
             }
             elapsedDays++;
             for (String key : SUM_KEYS) add(totals, key, day.get(key));
-            @SuppressWarnings("unchecked") Map<String, Boolean> complete = (Map<String, Boolean>) day.get("completeness");
-            for (String kind : KINDS) if (Boolean.TRUE.equals(complete.get(kind)))
-                completeDays.put(kind, (Integer) completeDays.get(kind) + 1);
             finalizeSums(day);
             applyConstituentGroups(day, constituentGroups(smokingByDay.getOrDefault(LocalDate.parse(day.get("date").toString()), List.of())));
         }
@@ -380,7 +373,6 @@ public final class BehaviorCalculator {
         if (elapsedDays == 0) leaveFutureUnfilled(totals);
         totals.put("days", dayCount);
         totals.put("elapsedDays", elapsedDays);
-        totals.put("completeDays", completeDays);
         totals.put("costNotice", "费用按种类单价与本人用量计算，不依赖购买流水。历史记录保留当时的单价；缺价时显示已知小计与缺失记录数。");
         totals.put("ethanolEquivalent42Notice", "按相同纯酒精量折合 42%vol 白酒的毫升数，仅用于量纲比较，不表示饮用建议或安全量。");
         Map<String, Object> alcohol = alcoholEstimate(state, now, now);
@@ -395,56 +387,49 @@ public final class BehaviorCalculator {
             "warnings", warnings, "recordingPolicy", RECORDING_POLICY);
     }
 
-    /** Lifetime quantities only: no daily expansion and no per-record alcohol model evaluation. */
+    /** Lifetime quantities and a bounded trend, without evaluating per-record alcohol associations. */
     public static Map<String, Object> summary(Map<String, List<Map<String, Object>>> state, LocalDateTime now) {
         if (now == null) throw invalid("当前时间不能为空");
         LocalDate today = now.toLocalDate();
         LocalDate earliest = null;
         Map<String, Object> totals = emptySums();
-        Map<String, Object> completeDays = new LinkedHashMap<>();
-        KINDS.forEach(kind -> completeDays.put(kind, 0));
         List<Map<String, Object>> smoking = occurredRows(state, "smoking", "occurredAt", now);
         List<Map<String, Object>> sessions = occurredRows(state, "sessions", "startedAt", now);
         List<Map<String, Object>> drinks = occurredRows(state, "drinks", "occurredAt", now);
         List<Map<String, Object>> intimacy = occurredRows(state, "intimacy", "occurredAt", now);
-        for (Map<String, Object> row : smoking) accumulateSmoking(totals, row);
-        Set<String> populatedSessions = new LinkedHashSet<>();
-        for (Map<String, Object> row : drinks) {
-            populatedSessions.add(string(row.get("sessionId")));
-            accumulateDrink(totals, row);
-        }
-        for (Map<String, Object> row : sessions) {
-            add(totals, "alcoholSessions", ONE);
-            if (!populatedSessions.contains(string(row.get("id")))) accumulateEmptySession(totals);
-        }
-        for (Map<String, Object> row : intimacy) add(totals, "intimacyCount", row.getOrDefault("count", ONE));
-        for (Map<String, Object> row : occurredRows(state, "purchases", "occurredAt", now))
-            if (!"OTHER".equals(string(row.get("payer")))) add(totals, "paidAmount", row.get("amount"));
         for (List<Map<String, Object>> group : List.of(smoking, sessions, drinks, intimacy)) {
             for (Map<String, Object> row : group) {
                 LocalDate recorded = parseTime(row.get(row.containsKey("startedAt") ? "startedAt" : "occurredAt")).toLocalDate();
                 if (earliest == null || recorded.isBefore(earliest)) earliest = recorded;
             }
         }
-        Map<String, Map<String, Object>> confirmations = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows(state, "completeness")) {
-            LocalDate recorded = date(row.get("date"));
-            String kind = string(row.get("kind"));
-            if (recorded == null || recorded.isAfter(today) || !KINDS.contains(kind)) continue;
-            if (earliest == null || recorded.isBefore(earliest)) earliest = recorded;
-            String key = recorded + ":" + kind;
-            Map<String, Object> previous = confirmations.get(key);
-            if (previous == null || string(row.get("updatedAt")).compareTo(string(previous.get("updatedAt"))) > 0)
-                confirmations.put(key, row);
+        ChronoUnit unit = ChronoUnit.DAYS;
+        if (earliest != null && ChronoUnit.DAYS.between(earliest, today) + 1 > 731) {
+            unit = today.isAfter(earliest.plusYears(30)) ? ChronoUnit.YEARS : ChronoUnit.MONTHS;
         }
-        for (Map<String, Object> row : confirmations.values()) if (Boolean.TRUE.equals(row.get("complete"))) {
-            String kind = string(row.get("kind"));
-            completeDays.put(kind, (Integer) completeDays.get(kind) + 1);
+        Map<LocalDate, Map<String, Object>> periods = new LinkedHashMap<>();
+        for (Map<String, Object> row : smoking)
+            accumulateSmoking(trendBucket(periods, row.get("occurredAt"), unit), row);
+        Set<String> populatedSessions = new LinkedHashSet<>();
+        for (Map<String, Object> row : drinks) {
+            populatedSessions.add(string(row.get("sessionId")));
+            accumulateDrink(trendBucket(periods, row.get("occurredAt"), unit), row);
+        }
+        for (Map<String, Object> row : sessions) {
+            Map<String, Object> bucket = trendBucket(periods, row.get("startedAt"), unit);
+            add(bucket, "alcoholSessions", ONE);
+            if (!populatedSessions.contains(string(row.get("id")))) accumulateEmptySession(bucket);
+        }
+        for (Map<String, Object> row : intimacy)
+            accumulateIntimacy(trendBucket(periods, row.get("occurredAt"), unit), row);
+        for (Map<String, Object> row : occurredRows(state, "purchases", "occurredAt", now))
+            if (!"OTHER".equals(string(row.get("payer")))) add(totals, "paidAmount", row.get("amount"));
+        for (Map<String, Object> bucket : periods.values()) {
+            // Add unrounded values before resolving missing data for the individual period.
+            for (String key : SUM_KEYS) add(totals, key, bucket.get(key));
+            finalizeSums(bucket);
         }
         finalizeSums(totals);
-        Map<String, Boolean> confirmed = new LinkedHashMap<>();
-        KINDS.forEach(kind -> confirmed.put(kind, (Integer) completeDays.get(kind) > 0));
-        totals.put("completeness", confirmed);
         totals.put("hasSmokingRecords", !smoking.isEmpty());
         totals.put("hasAlcoholRecords", !sessions.isEmpty() || !drinks.isEmpty());
         totals.put("hasIntimacyRecords", !intimacy.isEmpty());
@@ -452,11 +437,43 @@ public final class BehaviorCalculator {
         totals.put("alcoholRelatedSmokingCount", null);
         totals.put("alcoholRelatedIntimacyCount", null);
         totals.put("days", earliest == null ? 0L : ChronoUnit.DAYS.between(earliest, today) + 1);
-        totals.put("completeDays", completeDays);
         totals.put("costNotice", "累计按行为保存时的单价与本人用量汇总；缺价记录不按零元处理，购买流水不参与消耗费用。");
         totals.put("ethanolEquivalent42Notice", "按相同纯酒精量折合 42%vol 白酒的毫升数，仅用于量纲比较，不表示饮用建议或安全量。");
         return map("from", earliest == null ? null : earliest.toString(), "to", today.toString(), "totals", totals,
-            "recordingPolicy", RECORDING_POLICY);
+            "trend", lifetimeTrend(periods, earliest, today, unit), "recordingPolicy", RECORDING_POLICY);
+    }
+
+    private static LocalDate periodStart(LocalDate date, ChronoUnit unit) {
+        return switch (unit) {
+            case MONTHS -> date.withDayOfMonth(1);
+            case YEARS -> date.withDayOfYear(1);
+            default -> date;
+        };
+    }
+
+    private static Map<String, Object> trendBucket(Map<LocalDate, Map<String, Object>> periods, Object time, ChronoUnit unit) {
+        LocalDate key = periodStart(parseTime(time).toLocalDate(), unit);
+        return periods.computeIfAbsent(key, ignored -> emptySums());
+    }
+
+    private static Map<String, Object> lifetimeTrend(Map<LocalDate, Map<String, Object>> periods,
+            LocalDate earliest, LocalDate today, ChronoUnit unit) {
+        String label = switch (unit) {
+            case MONTHS -> "month";
+            case YEARS -> "year";
+            default -> "day";
+        };
+        List<Map<String, Object>> points = new ArrayList<>();
+        if (earliest != null) {
+            for (LocalDate start = periodStart(earliest, unit); !start.isAfter(today); start = start.plus(1, unit)) {
+                Map<String, Object> bucket = periods.getOrDefault(start, Map.of());
+                points.add(map("date", (start.isBefore(earliest) ? earliest : start).toString(),
+                    "smokingCount", bucket.getOrDefault("smokingCount", ZERO),
+                    "ethanolEquivalent42Ml", bucket.getOrDefault("ethanolEquivalent42Ml", ZERO),
+                    "intimacyCount", bucket.getOrDefault("intimacyCount", ZERO)));
+            }
+        }
+        return map("unit", label, "points", points);
     }
 
     private static List<Map<String, Object>> occurredRows(Map<String, List<Map<String, Object>>> state,
@@ -465,6 +482,12 @@ public final class BehaviorCalculator {
             LocalDateTime occurred = parseTime(row.get(timeKey));
             return occurred != null && !occurred.isAfter(now);
         }).toList();
+    }
+
+    private static void accumulateIntimacy(Map<String, Object> target, Map<String, Object> row) {
+        Object count = row.getOrDefault("count", ONE);
+        add(target, "intimacyCount", count);
+        add(target, "SEX".equals(row.get("activityType")) ? "sexCount" : "masturbationCount", count);
     }
 
     private static void accumulateSmoking(Map<String, Object> target, Map<String, Object> row) {
@@ -566,7 +589,7 @@ public final class BehaviorCalculator {
         if (groups.size() > 1) for (String key : List.of("smokingTarMg", "smokingNicotineMg", "smokingCoMg")) summary.put(key, null);
     }
 
-    private static Map<String, Object> alcoholLink(Map<String, Object> intimacy,
+    public static Map<String, Object> alcoholLink(Map<String, Object> intimacy,
             Map<String, List<Map<String, Object>>> state, Map<String, Object> settings, LocalDateTime knownAt) {
         TimeRange event = timeRange(intimacy, "occurredAt", knownAt);
         String status;
@@ -658,7 +681,7 @@ public final class BehaviorCalculator {
     private record BodySelection(Map<String, Object> row, String selection) {}
     private record Scenario(double current, LocalDateTime projectedEnd) {}
 
-    private static Map<String, Object> alcoholEstimate(Map<String, List<Map<String, Object>>> state,
+    public static Map<String, Object> alcoholEstimate(Map<String, List<Map<String, Object>>> state,
             LocalDateTime at, LocalDateTime knownAt) {
         List<Map<String, Object>> missing = new ArrayList<>();
         List<Map<String, Object>> historicalMissing = new ArrayList<>();
@@ -949,17 +972,6 @@ public final class BehaviorCalculator {
         return new Scenario(Math.max(0, current), end);
     }
 
-    private static Map<String, Boolean> completeness(Map<String, List<Map<String, Object>>> state, LocalDate day) {
-        Map<String, Boolean> result = new LinkedHashMap<>();
-        for (String kind : KINDS) {
-            Map<String, Object> latest = rows(state, "completeness").stream()
-                .filter(r -> day.equals(date(r.get("date"))) && kind.equals(string(r.get("kind"))))
-                .max(Comparator.comparing(r -> string(r.get("updatedAt")))).orElse(null);
-            result.put(kind, latest != null && Boolean.TRUE.equals(latest.get("complete")));
-        }
-        return result;
-    }
-
     private static Map<String, Object> emptySums() {
         Map<String, Object> result = new LinkedHashMap<>();
         SUM_KEYS.forEach(key -> result.put(key, ZERO));
@@ -1100,7 +1112,7 @@ public final class BehaviorCalculator {
     private static BigDecimal multiplyOrNull(BigDecimal a, BigDecimal b, int scale) {
         return a == null || b == null ? null : round(a.multiply(b), scale);
     }
-    private static BigDecimal equivalent42(BigDecimal grams) {
+    public static BigDecimal equivalent42(BigDecimal grams) {
         return grams == null ? null : grams.divide(ETHANOL_PER_ML_42, 4, RoundingMode.HALF_UP);
     }
     private static BigDecimal divide(BigDecimal a, BigDecimal b) { return a.divide(b, 12, RoundingMode.HALF_UP); }

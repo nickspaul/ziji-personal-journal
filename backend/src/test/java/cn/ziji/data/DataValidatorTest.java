@@ -6,6 +6,33 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class DataValidatorTest {
     final DataValidator validator=new DataValidator(new SchemaRegistry());
+    @Test void oldPrivateRequestsKeepTheirMeaningAndEditsPreserveExplicitType() {
+        var legacy=validator.normalize("intimacy",Map.of("count",2),null,false);
+        assertEquals("MASTURBATION",legacy.get("activityType"));
+        var sex=validator.normalize("intimacy",Map.of("activityType","SEX"),legacy,false);
+        assertEquals("SEX",validator.normalize("intimacy",Map.of("notes","晚间"),sex,false).get("activityType"));
+        assertThrows(IllegalArgumentException.class,()->validator.normalize("intimacy",Map.of("activityType","UNKNOWN"),sex,false));
+        assertThrows(IllegalArgumentException.class,()->validator.normalize("intimacy",Map.of("activityType",""),null,false));
+    }
+    @Test void ledgerRejectsAmountsOutsidePositiveWholeCents() {
+        for (String amount : List.of("0", "-1", "0.001", "10.019", "1000000000")) {
+            assertThrows(IllegalArgumentException.class,
+                () -> validator.normalize("ledger", Map.of("category", "餐饮", "amount", amount), null, false), amount);
+        }
+        var entry = validator.normalize("ledger", Map.of("category", " 餐饮 ", "amount", "0.01"), null, false);
+        assertEquals("0.01", entry.get("amount").toString());
+        assertEquals("餐饮", entry.get("category"));
+        assertEquals("EXPENSE", entry.get("direction"));
+    }
+    @Test void ledgerRejectsBehaviorCostFieldsAndInvalidCategories() {
+        var entry = Map.<String,Object>of("category", "餐饮", "amount", 5);
+        for (var extra : List.of(Map.of("cost", 5), Map.of("direction", "TRANSFER"),
+                                 Map.of("date", "10000-01-01"), Map.of("category", "餐".repeat(41)))) {
+            var input = new HashMap<>(entry);
+            input.putAll(extra);
+            assertThrows(IllegalArgumentException.class, () -> validator.normalize("ledger", input, null, false));
+        }
+    }
     @Test void explicitUnknownPriceStaysUnknown(){var row=validator.normalize("smoking",Map.of("count",3),null,false);assertNull(row.get("unitPrice"));assertEquals("EXACT",row.get("timePrecision"));assertEquals("3",row.get("count").toString());}
     @Test void rejectsFractionalCigaretteCount(){assertThrows(IllegalArgumentException.class,()->validator.normalize("smoking",Map.of("count",1.5),null,false));}
     @Test void rejectsSqlAndUnknownFieldNames(){assertThrows(IllegalArgumentException.class,()->validator.normalize("smoking",Map.of("count",1,"passwordHash","oops"),null,false));assertThrows(IllegalArgumentException.class,()->new SchemaRegistry().require("products; DROP TABLE zj_auth"));}

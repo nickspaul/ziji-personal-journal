@@ -20,6 +20,8 @@ import java.util.*;
 @Service
 public class BackupService {
     private static final Logger log=LoggerFactory.getLogger(BackupService.class);
+    // Import-only names: retired tables and CRUD schemas must not be recreated.
+    private static final Map<String,String> RETIRED_COLLECTIONS=Map.of("completeness","每日完整度","goals","个人目标");
     private final DataService data;private final DataRepository repository;private final SchemaRegistry registry;private final DataValidator validator;private final ObjectMapper json;private final JdbcTemplate jdbc;private final Path backupDirectory;
     public BackupService(DataService data,DataRepository repository,SchemaRegistry registry,DataValidator validator,ObjectMapper json,JdbcTemplate jdbc,@Value("${ziji.data-directory}") String directory) {
         this.data=data;this.repository=repository;this.registry=registry;this.validator=validator;this.json=json;this.jdbc=jdbc;this.backupDirectory=Path.of(directory).toAbsolutePath().normalize().resolve("backups");
@@ -34,8 +36,17 @@ public class BackupService {
     private Plan plan(Map<String,Object> backup) {
         if(!"ziji-backup".equals(backup.get("format"))||!"1".equals(String.valueOf(backup.get("schemaVersion"))))throw new IllegalArgumentException("备份格式或版本不受支持");
         if(!(backup.get("collections") instanceof Map<?,?> raw))throw new IllegalArgumentException("备份缺少数据集合");
-        for(Object key:raw.keySet())registry.require(key.toString());
-        Map<String,List<Map<String,Object>>> union=data.state(null);Map<String,List<Map<String,Object>>> additions=new LinkedHashMap<>();Map<String,Object> counts=new LinkedHashMap<>();List<String> errors=new ArrayList<>();List<Map<String,Object>> conflicts=new ArrayList<>();int total=0,newCount=0,existingCount=0;
+        List<Map<String,Object>> ignoredCollections=new ArrayList<>();List<String> warnings=new ArrayList<>();int ignoredRecords=0;
+        for(var entry:raw.entrySet()) {
+            String name=entry.getKey().toString();String label=RETIRED_COLLECTIONS.get(name);
+            if(label==null){registry.require(name);continue;}
+            Object value=entry.getValue();if(value==null)value=List.of();
+            if(!(value instanceof List<?> list))throw new IllegalArgumentException(label+"应为数组");
+            ignoredRecords+=list.size();if(ignoredRecords>100000)throw new IllegalArgumentException("一次恢复最多十万条业务记录");
+            ignoredCollections.add(Map.of("collection",name,"label",label,"count",list.size()));
+            if(!list.isEmpty())warnings.add(label+"已移除，将跳过旧备份中的 "+list.size()+" 条记录；其他有效数据照常校验和恢复。");
+        }
+        Map<String,List<Map<String,Object>>> union=data.state(null);Map<String,List<Map<String,Object>>> additions=new LinkedHashMap<>();Map<String,Object> counts=new LinkedHashMap<>();List<String> errors=new ArrayList<>();List<Map<String,Object>> conflicts=new ArrayList<>();int total=ignoredRecords,newCount=0,existingCount=0;
         for(var c:registry.all()) {
             Object source=raw.get(c.name());if(source==null)source=List.of();if(!(source instanceof List<?> list))throw new IllegalArgumentException(c.label()+"应为数组");
             if((total+=list.size())>100000)throw new IllegalArgumentException("一次恢复最多十万条业务记录");
@@ -60,7 +71,6 @@ public class BackupService {
         for(var e:additions.entrySet()){List<Map<String,Object>> merged=new ArrayList<>(union.get(e.getKey()));merged.addAll(e.getValue());union.put(e.getKey(),merged);}
         for(var e:additions.entrySet())for(var row:e.getValue())try {
             data.checkReferences(e.getKey(),row,null,union);
-            if(e.getKey().equals("completeness")&&!Boolean.TRUE.equals(row.get("deleted"))&&union.get("completeness").stream().filter(r->!Boolean.TRUE.equals(r.get("deleted"))&&Objects.equals(row.get("date"),r.get("date"))&&Objects.equals(row.get("kind"),r.get("kind"))).count()>1)throw new IllegalArgumentException("同一日期的完整度有重复记录");
             if(e.getKey().equals("drinks")&&!Boolean.TRUE.equals(row.get("deleted"))&&union.get("sessions").stream().anyMatch(s->Objects.equals(s.get("id"),row.get("sessionId"))&&Boolean.TRUE.equals(s.get("deleted"))))throw new IllegalArgumentException("有效饮酒明细关联了已删除场次");
         }catch(RuntimeException ex){if(errors.size()<50)errors.add(e.getKey()+" "+row.get("id")+"："+ex.getMessage());}
         try{validateAudit(backup.get("audit"));}catch(RuntimeException e){errors.add("操作历史："+e.getMessage());}
@@ -72,6 +82,7 @@ public class BackupService {
             }catch(RuntimeException e){errors.add("生活日志设置："+e.getMessage());}
         }
         Map<String,Object> preview=new LinkedHashMap<>();preview.put("valid",errors.isEmpty());preview.put("counts",counts);preview.put("newRecords",newCount);preview.put("existingRecords",existingCount);preview.put("conflicts",conflicts);preview.put("errors",errors);preview.put("policy","保留本机已有 ID 的记录，只导入新 ID；历史快照保留。当前设置优先，备份不包含解锁口令。");
+        preview.put("ignoredCollections",ignoredCollections);preview.put("ignoredRecords",ignoredRecords);preview.put("warnings",warnings);
         return new Plan(additions,preview);
     }
     public Map<String,Object> preview(Map<String,Object> backup){return plan(backup).preview();}

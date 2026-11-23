@@ -53,6 +53,26 @@ public class TaskEffortService {
 
     private record Interval(LocalDateTime start,LocalDateTime end) {}
 
+    /** Input rows overlap the period. Clip exact intervals before de-duplicating;
+     * a manually entered duration spanning a boundary cannot be apportioned. */
+    public static Map<String,Object> summarizePeriod(List<Map<String,Object>> rows,LocalDate from,LocalDate to) {
+        List<Map<String,Object>> clipped=new ArrayList<>();
+        for(var original:rows) {
+            var row=new LinkedHashMap<>(original);
+            LocalDate startDay=LocalDate.parse(original.get("startDate").toString());
+            LocalDate endDay=original.get("endDate")==null?startDay:LocalDate.parse(original.get("endDate").toString());
+            Interval times=interval(original);
+            if(times!=null) {
+                LocalDateTime start=times.start.isBefore(from.atStartOfDay())?from.atStartOfDay():times.start;
+                LocalDateTime end=times.end.isAfter(to.plusDays(1).atStartOfDay())?to.plusDays(1).atStartOfDay():times.end;
+                row.put("startDate",start.toLocalDate());row.put("startTime",start.toLocalTime());
+                row.put("endDate",end.toLocalDate());row.put("endTime",end.toLocalTime());
+            } else if(startDay.isBefore(from)||endDay.isAfter(to)) row.remove("durationMinutes");
+            clipped.add(row);
+        }
+        return summarize(clipped);
+    }
+
     static Map<String,Object> summarize(List<Map<String,Object>> rows) {
         long linked=0,timed=0,manual=0,unmeasured=0,manualMinutes=0,rawTimedMinutes=0;
         List<Interval> intervals=new ArrayList<>();

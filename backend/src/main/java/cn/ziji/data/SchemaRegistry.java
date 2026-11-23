@@ -21,6 +21,9 @@ public class SchemaRegistry {
                 if(name.equals("journal")&&field.key().equals("durationMinutes")) {
                     description.put("min",1);description.put("max",10080);description.put("step",1);
                 }
+                if(name.equals("ledger")&&field.key().equals("amount")) {
+                    description.put("min",0.01);description.put("max",999999999);description.put("step",0.01);
+                }
                 return description;
             }).toList();
             return Map.of("name",name,"label",label,"fields",descriptions);
@@ -28,6 +31,7 @@ public class SchemaRegistry {
     }
     private final LinkedHashMap<String,Collection> collections = new LinkedHashMap<>();
     public static boolean isJournalCollection(String name) { return Set.of("journal","tasks").contains(name); }
+    public static boolean usesBehaviorState(String name) { return !isJournalCollection(name) && !name.equals("ledger"); }
     public SchemaRegistry() {
         add("products", "商品资料", List.of(
             field("kind","类别","select",true,"SMOKING:香烟|ALCOHOL:酒品"),
@@ -109,7 +113,8 @@ public class SchemaRegistry {
             field("unitPrice","每瓶价格覆盖（元）","number",false,""),
             field("notes","备注","textarea",false,"")
         ));
-        add("intimacy", "自慰记录", List.of(
+        add("intimacy", "私人记录", List.of(
+            field("activityType","私人行为类型","select",true,"MASTURBATION:自慰|SEX:性生活"),
             field("occurredAt","发生时间","datetime",true,""),
             field("timePrecision","时间精度","select",true,"APPROX:大概时间（前后约1小时）|EXACT:时间准确|DATE:仅记得日期"),
             field("count","次数","number",true,""),
@@ -131,24 +136,19 @@ public class SchemaRegistry {
             field("sex","模型使用的生理参数","select",true,"MALE:男性参数|FEMALE:女性参数|UNSPECIFIED:不填写"),
             field("notes","备注","textarea",false,"")
         ));
-        add("completeness", "每日完整度", List.of(
-            field("date","日期","date",true,""),
-            field("kind","行为","select",true,"SMOKING:吸烟|ALCOHOL:饮酒|INTIMACY:自慰"),
-            field("complete","已确认记录完整","boolean",true,"")
-        ));
-        add("goals", "个人目标", List.of(
-            field("kind","行为","select",true,"SMOKING:吸烟|ALCOHOL:饮酒|INTIMACY:自慰"),
-            field("period","周期","select",true,"DAY:每日|WEEK:每周|MONTH:每月"),
-            field("limitValue","个人目标","number",true,""),
-            field("unit","计量单位","select",true,"COUNT:根数或次数|ML:毫升|GRAMS:纯酒精克数"),
-            field("enabled","启用","boolean",true,"")
-        ));
         add("health", "健康资料", List.of(
             field("title","标题","text",true,""),
-            field("topic","主题","select",true,"SMOKING:吸烟|ALCOHOL:饮酒|INTIMACY:自慰|GENERAL:通用"),
+            field("topic","主题","select",true,"SMOKING:吸烟|ALCOHOL:饮酒|INTIMACY:私人行为|GENERAL:通用"),
             field("body","说明","textarea",true,""),
             field("sourceUrl","权威来源","text",false,""),
             field("reviewedAt","资料复核日期","date",false,"")
+        ));
+        add("ledger", "收支明细", List.of(
+            field("date","收支日期","date",true,""),
+            field("direction","收支类型","select",true,"EXPENSE:支出|INCOME:收入"),
+            field("amount","金额（元）","number",true,""),
+            field("category","分类","text",true,""),
+            field("notes","备注","textarea",false,"")
         ));
         add("tasks", "待办任务", List.of(
             field("title","待办事项","text",true,""),

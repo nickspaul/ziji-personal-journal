@@ -366,10 +366,6 @@ class BehaviorCalculatorTest {
         var empty = BehaviorCalculator.analytics(state, Map.of(), DAY, DAY, NOW);
         assertNumber("0", nested(empty, "totals").get("ethanolEquivalent42Ml"));
         assertNumber("0", list(empty.get("daily")).get(0).get("ethanolEquivalent42Ml"));
-        state.put("completeness", List.of(map("date", DAY.toString(), "kind", "ALCOHOL", "complete", true)));
-        var complete = BehaviorCalculator.analytics(state, Map.of(), DAY, DAY, NOW);
-        assertNumber("0", nested(complete, "totals").get("ethanolEquivalent42Ml"));
-        assertNumber("0", list(complete.get("daily")).get(0).get("ethanolEquivalent42Ml"));
     }
 
     @Test void drinkCatalogChangesDoNotRewriteOldStrengthOrCapacityOnQuantityEdit() {
@@ -395,7 +391,6 @@ class BehaviorCalculatorTest {
 
     @Test void unrecordedPastAndCurrentDaysAreZeroWithoutInventingConfirmations() {
         var state = state();
-        state.put("completeness", List.of(map("date", "2026-10-21", "kind", "SMOKING", "complete", true)));
         var report = BehaviorCalculator.analytics(state, Map.of(), DAY.minusDays(1), DAY, NOW);
         var daily = list(report.get("daily"));
         for (var day : daily) {
@@ -403,9 +398,9 @@ class BehaviorCalculatorTest {
                 assertNumber("0", day.get(field));
             assertEquals(false, day.get("isFuture"));
         }
-        assertEquals(false, nested(daily.get(0), "completeness").get("SMOKING"));
-        assertEquals(1, nested(nested(report, "totals"), "completeDays").get("SMOKING"));
-        assertEquals(1, state.get("completeness").size());
+        assertFalse(daily.get(0).containsKey("completeness"));
+        assertFalse(nested(report, "totals").containsKey("completeDays"));
+        assertFalse(state.containsKey("completeness"));
         assertFalse(state.containsKey("smoking"));
         assertFalse(report.get("warnings").toString().contains("尚未确认"));
         assertEquals("UNRECORDED_AS_ZERO", report.get("recordingPolicy"));
@@ -435,7 +430,6 @@ class BehaviorCalculatorTest {
             map("id", "future-time", "occurredAt", "2026-10-21T23:30:00", "count", 100, "cost", 100),
             map("id", "future-day", "occurredAt", "2026-10-22T11:00:00", "count", 100, "cost", 100)));
         state.put("sessions", List.of(map("id", "future-session", "startedAt", "2026-10-22T11:00:00")));
-        state.put("completeness", List.of(map("date", "2026-10-22", "kind", "SMOKING", "complete", true)));
         var report = BehaviorCalculator.analytics(state, Map.of(), DAY, DAY.plusDays(1), NOW);
         var today = list(report.get("daily")).get(0);
         var future = list(report.get("daily")).get(1);
@@ -447,7 +441,6 @@ class BehaviorCalculatorTest {
         assertNumber("2", nested(report, "totals").get("smokingCount"));
         assertNumber("3", nested(report, "totals").get("consumptionCost"));
         assertNumber("1", nested(report, "totals").get("elapsedDays"));
-        assertNumber("0", nested(nested(report, "totals"), "completeDays").get("SMOKING"));
         var onlyFuture = BehaviorCalculator.analytics(state, Map.of(), DAY.plusDays(1), DAY.plusDays(1), NOW);
         assertNull(nested(onlyFuture, "totals").get("smokingCount"));
         assertNull(nested(onlyFuture, "totals").get("consumptionCost"));

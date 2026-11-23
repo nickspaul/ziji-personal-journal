@@ -20,7 +20,7 @@ public class DataService {
     public List<Map<String,Object>> list(String collection,boolean deleted){return repository.list(collection,deleted);}
     public Map<String,List<Map<String,Object>>> state(){
         Map<String,List<Map<String,Object>>> state=new LinkedHashMap<>();
-        for(var c:registry.all())if(!SchemaRegistry.isJournalCollection(c.name()))state.put(c.name(),repository.list(c.name(),false));
+        for(var c:registry.all())if(SchemaRegistry.usesBehaviorState(c.name()))state.put(c.name(),repository.list(c.name(),false));
         return state;
     }
     public Map<String,List<Map<String,Object>>> state(Boolean deleted) {
@@ -34,7 +34,7 @@ public class DataService {
         Map<String,Object> existing=repository.find(collection,id);
         if(existing!=null)return idempotent(collection,input,existing);
         Map<String,Object> normalized=validator.normalize(collection,input,null,false);
-        Map<String,List<Map<String,Object>>> current=SchemaRegistry.isJournalCollection(collection)?Map.of():state();checkReferences(collection,normalized,null,current);checkCompleteness(collection,normalized,null);
+        Map<String,List<Map<String,Object>>> current=SchemaRegistry.usesBehaviorState(collection)?state():Map.of();checkReferences(collection,normalized,null,current);
         Map<String,Object> enriched=BehaviorCalculator.enrich(collection,normalized,null,current);
         enriched=new LinkedHashMap<>(enriched);enriched.put("id",id);enriched.put("version",1L);enriched.put("createdAt",DataValidator.now());enriched.put("updatedAt",DataValidator.now());enriched.put("deleted",false);
         try{repository.insert(collection,enriched);}catch(DuplicateKeyException e){Map<String,Object> concurrent=repository.find(collection,id);if(concurrent!=null)return idempotent(collection,input,concurrent);throw e;}
@@ -58,7 +58,7 @@ public class DataService {
         if(SchemaRegistry.isJournalCollection(collection)&&sameBusiness(collection,normalized,previous))return previous;
         if(expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         protectHistoricalReferences(collection,id,previous,normalized);
-        Map<String,List<Map<String,Object>>> current=SchemaRegistry.isJournalCollection(collection)?Map.of():state();checkReferences(collection,normalized,previous,current);checkCompleteness(collection,normalized,id);
+        Map<String,List<Map<String,Object>>> current=SchemaRegistry.usesBehaviorState(collection)?state():Map.of();checkReferences(collection,normalized,previous,current);
         Map<String,Object> result=new LinkedHashMap<>(BehaviorCalculator.enrich(collection,normalized,previous,current));
         result.put("id",id);result.put("version",expected+1);result.put("createdAt",previous.get("createdAt"));result.put("updatedAt",DataValidator.now());result.put("deleted",false);
         if(!repository.update(collection,result,expected))throw ApiException.conflict();repository.audit("UPDATE",collection,id,previous,result);
@@ -104,7 +104,7 @@ public class DataService {
     public Map<String,Object> restore(String collection,String id,long expected) {
         Map<String,Object> previous=require(collection,id);if(expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         if(!Boolean.TRUE.equals(previous.get("deleted")))return previous;
-        Map<String,List<Map<String,Object>>> current=SchemaRegistry.isJournalCollection(collection)?Map.of():state();checkReferences(collection,previous,previous,current);checkCompleteness(collection,previous,id);
+        Map<String,List<Map<String,Object>>> current=SchemaRegistry.usesBehaviorState(collection)?state():Map.of();checkReferences(collection,previous,previous,current);
         if(collection.equals("drinks")&&current.get("sessions").stream().noneMatch(r->Objects.equals(r.get("id"),previous.get("sessionId"))))throw new ApiException(409,"请先恢复对应的饮酒场次");
         Map<String,Object> next=new LinkedHashMap<>(previous);next.put("deleted",false);next.put("version",expected+1);next.put("updatedAt",DataValidator.now());
         next=BehaviorCalculator.fillMissingCost(collection,next,current);
@@ -112,10 +112,6 @@ public class DataService {
         if(collection.equals("products"))fillMissingCostsFor(id);
         if(collection.equals("prices"))fillMissingCostsFor(String.valueOf(next.get("productId")));
         return next;
-    }
-    private void checkCompleteness(String collection,Map<String,Object> row,String exceptId) {
-        if(!collection.equals("completeness"))return;
-        if(list(collection,false).stream().anyMatch(r->!Objects.equals(exceptId,r.get("id"))&&Objects.equals(row.get("date"),r.get("date"))&&Objects.equals(row.get("kind"),r.get("kind"))))throw new ApiException(409,"这一天的该类完整度已经存在，请修改已有记录");
     }
     private void protectHistoricalReferences(String collection,String id,Map<String,Object> before,Map<String,Object> after) {
         if(collection.equals("products")&&!Objects.equals(before.get("kind"),after.get("kind"))) {

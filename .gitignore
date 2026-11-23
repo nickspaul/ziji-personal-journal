@@ -3,6 +3,7 @@
 /data/
 /backend/data/
 /backups/
+/outputs/
 .env
 .env.*
 !.env.example

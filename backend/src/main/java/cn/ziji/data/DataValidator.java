@@ -21,11 +21,14 @@ public class DataValidator {
         var c=registry.require(collection);Map<String,Object> m=new LinkedHashMap<>();
         Set<String> allowed=new HashSet<>(META);c.fields().forEach(f->allowed.add(f.key()));
         for(String key:input.keySet()) {
-            if(!allowed.contains(key)&&(SchemaRegistry.isJournalCollection(collection)||!isDerived(key))) throw new IllegalArgumentException("不支持的字段："+key);
+            if(!allowed.contains(key)&&(!SchemaRegistry.usesBehaviorState(collection)||!isDerived(key))) throw new IllegalArgumentException("不支持的字段："+key);
         }
         if(previous!=null) for(var f:c.fields())m.put(f.key(),previous.get(f.key()));
         for(var f:c.fields())if(input.containsKey(f.key()))m.put(f.key(),parse(f,input.get(f.key())));
         if(previous==null&&!imported) defaults(collection,m);
+        // Old clients and backups omit this field because their form recorded only masturbation.
+        if(collection.equals("intimacy") && !input.containsKey("activityType") && m.get("activityType")==null)
+            m.put("activityType","MASTURBATION");
         for(var f:c.fields()) {
             Object v=m.get(f.key());
             if(f.required()&&(v==null||v instanceof String s&&s.isBlank())) throw new IllegalArgumentException("请填写"+f.label());
@@ -39,6 +42,15 @@ public class DataValidator {
             unused.forEach(key->m.put(key,null));
         }
         if(SchemaRegistry.isJournalCollection(collection))validateJournal(collection,m,previous,imported);
+        if(collection.equals("ledger")) {
+            validStorageDate(m,"date");
+            BigDecimal amount=(BigDecimal)m.get("amount");
+            if(amount.signum()<=0||amount.stripTrailingZeros().scale()>2)
+                throw new IllegalArgumentException("收支金额必须大于零，最多精确到分");
+            String category=m.get("category").toString();
+            if(category.codePointCount(0,category.length())>40||category.chars().anyMatch(Character::isISOControl))
+                throw new IllegalArgumentException("收支分类最多40字，不能包含换行或控制字符");
+        }
         validateRanges(collection,m,!imported&&(previous==null||!Boolean.TRUE.equals(previous.get("priceConfirmed"))));
         return m;
     }
@@ -93,8 +105,7 @@ public class DataValidator {
             case "drinks" -> {put(m,"occurredAt",now());put(m,"timePrecision","EXACT");put(m,"inputMode","BOTTLES");put(m,"share",BigDecimal.ONE);if("BOTTLES".equals(m.get("inputMode")))put(m,"bottles",BigDecimal.ONE);}
             case "intimacy" -> {put(m,"occurredAt",now());put(m,"timePrecision","EXACT");put(m,"count",BigDecimal.ONE);put(m,"manualAlcohol","AUTO");}
             case "body" -> {put(m,"measuredAt",now());put(m,"sex","UNSPECIFIED");}
-            case "completeness" -> {put(m,"date",LocalDate.now(ZONE).toString());put(m,"complete",true);}
-            case "goals" -> {put(m,"enabled",true);put(m,"period","WEEK");put(m,"unit","COUNT");}
+            case "ledger" -> {put(m,"date",LocalDate.now(ZONE).toString());put(m,"direction","EXPENSE");}
             case "journal" -> {put(m,"startDate",LocalDate.now(ZONE).toString());put(m,"timeMode","DATE");put(m,"people",List.of());put(m,"tags",List.of());}
             case "tasks" -> {put(m,"status","TODO");put(m,"important",false);put(m,"tags",List.of());}
             default -> {}
@@ -173,7 +184,7 @@ public class DataValidator {
         if(d.compareTo(new BigDecimal(low))<0||d.compareTo(new BigDecimal(high))>0||(integer&&d.stripTrailingZeros().scale()>0))throw new IllegalArgumentException(key+"超出允许范围");
     }
     private void validateRanges(String c,Map<String,Object> m,boolean requireProductSpecifications) {
-        for(String k:List.of("amount","unitPrice","packagePrice","tarMg","nicotineMg","coMg","limitValue"))range(m,k,"0","999999999",false);
+        for(String k:List.of("amount","unitPrice","packagePrice","tarMg","nicotineMg","coMg"))range(m,k,"0","999999999",false);
         range(m,"abv","0","100",false);range(m,"share","0","1",false);range(m,"unitCount","1","1000",true);
         range(m,"count","1","10000",true);range(m,"quantity","0.000001","1000000",false);range(m,"bottles","0.000001","10000",false);
         range(m,"bottleMl","0.000001","100000",false);range(m,"volumeMl","0.000001","1000000",false);
