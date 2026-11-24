@@ -78,6 +78,7 @@ public class BackupService {
         if(backup.get("settings") instanceof Map<?,?> settings) {
             try {
                 if(settings.containsKey("journalPinnedFilters"))DataService.validateJournalPins(settings.get("journalPinnedFilters"));
+                if(settings.containsKey("journalVocabulary"))DataService.validateJournalVocabulary(settings.get("journalVocabulary"));
                 if(settings.containsKey("journalView")&&!Set.of("day","search","tasks").contains(settings.get("journalView")))throw new IllegalArgumentException("生活日志视图不正确");
             }catch(RuntimeException e){errors.add("生活日志设置："+e.getMessage());}
         }

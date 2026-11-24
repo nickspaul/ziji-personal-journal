@@ -127,12 +127,12 @@ public class DataService {
     }
     public void checkReferences(String collection,Map<String,Object> row,Map<String,Object> previous,Map<String,List<Map<String,Object>>> state) {
         for(var f:registry.require(collection).fields()) {
-            String target=switch(f.type()){case "product"->"products";case "session"->"sessions";case "purchase"->"purchases";case "task"->"tasks";default->null;};
+            String target=switch(f.type()){case "product"->"products";case "session"->"sessions";case "purchase"->"purchases";case "task"->"tasks";case "trip"->"journal";default->null;};
             if(target==null||row.get(f.key())==null)continue;
             String reference=row.get(f.key()).toString();Map<String,Object> ref=state.getOrDefault(target,List.of()).stream().filter(r->reference.equals(r.get("id"))).findFirst().orElse(null);
-            if(target.equals("tasks")&&!state.containsKey("tasks")) {
-                ref=repository.find("tasks",reference);
-                if(ref!=null&&Boolean.TRUE.equals(ref.get("deleted"))&&(previous==null||!Objects.equals(previous.get(f.key()),reference)))throw new IllegalArgumentException("关联待办已移入回收站，请先恢复或选择其他待办");
+            if((target.equals("tasks")||target.equals("journal"))&&!state.containsKey(target)) {
+                ref=repository.find(target,reference);
+                if(ref!=null&&Boolean.TRUE.equals(ref.get("deleted"))&&(previous==null||!Objects.equals(previous.get(f.key()),reference)))throw new IllegalArgumentException(f.label()+"已移入回收站，请先恢复或选择其他记录");
             }
             if(ref==null){if(previous!=null&&Objects.equals(previous.get(f.key()),reference))continue;throw new IllegalArgumentException(f.label()+"不存在或已删除");}
             if(f.key().equals("productId")&&(collection.equals("smoking")||collection.equals("drinks"))) {
@@ -147,6 +147,7 @@ public class DataService {
     }
     @Transactional
     public Map<String,Object> updateSettings(Map<String,Object> input) {
+        repository.lockSettings();
         Map<String,Object> before=settings();Map<String,Object> next=validateSettings(input);
         if(before.equals(next))return before;
         repository.settings(next);repository.audit("SETTINGS","settings","1",before,next);return next;
@@ -164,11 +165,39 @@ public class DataService {
                 case "defaultSmokingProductId","defaultAlcoholProductId" -> {if(v!=null&&!v.toString().isBlank()){v=DataValidator.uuid(v);Map<String,Object> product=require("products",v.toString());if(Boolean.TRUE.equals(product.get("deleted")))throw new IllegalArgumentException("默认商品已删除");String kind=k.equals("defaultSmokingProductId")?"SMOKING":"ALCOHOL";if(!kind.equals(product.get("kind")))throw new IllegalArgumentException("默认商品类别不符");}else v=null;}
                 case "journalView" -> {if(v==null||!Set.of("day","search","tasks").contains(v))throw new IllegalArgumentException("生活日志视图不正确");}
                 case "journalPinnedFilters" -> v=validateJournalPins(v);
+                case "journalVocabulary" -> v=validateJournalVocabulary(v);
                 default -> throw new IllegalArgumentException("不支持的设置："+k);
             }
             next.put(k,v);
         }
         return next;
+    }
+    public static Map<String,Map<String,List<String>>> validateJournalVocabulary(Object value) {
+        if (!(value instanceof Map<?,?> vocabulary) || !Set.of("tag","person").containsAll(vocabulary.keySet()))
+            throw new IllegalArgumentException("同行人与标签列表格式不正确");
+        Map<String,Map<String,List<String>>> result=new LinkedHashMap<>();
+        for (String kind : List.of("tag","person")) {
+            if (!vocabulary.containsKey(kind)) continue;
+            if (!(vocabulary.get(kind) instanceof Map<?,?> entries) || !Set.of("added","hidden").containsAll(entries.keySet()))
+                throw new IllegalArgumentException("同行人与标签列表格式不正确");
+            Map<String,List<String>> groups=new LinkedHashMap<>();
+            for (String key : List.of("added","hidden")) {
+                if (!entries.containsKey(key)) continue;
+                if (!(entries.get(key) instanceof List<?> names)) throw new IllegalArgumentException("名称应为列表");
+                Set<String> canonical=new LinkedHashSet<>();
+                for (Object name : names) {
+                    if (!(name instanceof String text)) throw new IllegalArgumentException("名称应为文字");
+                    List<String> normalized=DataValidator.normalizeStrings(List.of(text),kind.equals("tag"));
+                    if (normalized.isEmpty()) throw new IllegalArgumentException("名称不能为空");
+                    canonical.add(normalized.get(0));
+                }
+                groups.put(key,List.copyOf(canonical));
+            }
+            if (!Collections.disjoint(groups.getOrDefault("added",List.of()),groups.getOrDefault("hidden",List.of())))
+                throw new IllegalArgumentException("同一名称不能同时列为可选和已移除");
+            result.put(kind,groups);
+        }
+        return result;
     }
     public static List<Map<String,Object>> validateJournalPins(Object value) {
         if(!(value instanceof List<?> list)||list.size()>12)throw new IllegalArgumentException("固定筛选最多12项");

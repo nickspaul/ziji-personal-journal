@@ -31,7 +31,7 @@ public class SchemaRegistry {
     }
     private final LinkedHashMap<String,Collection> collections = new LinkedHashMap<>();
     public static boolean isJournalCollection(String name) { return Set.of("journal","tasks").contains(name); }
-    public static boolean usesBehaviorState(String name) { return !isJournalCollection(name) && !name.equals("ledger"); }
+    public static boolean usesBehaviorState(String name) { return !isJournalCollection(name) && !Set.of("ledger","bills").contains(name); }
     public SchemaRegistry() {
         add("products", "商品资料", List.of(
             field("kind","类别","select",true,"SMOKING:香烟|ALCOHOL:酒品"),
@@ -143,13 +143,6 @@ public class SchemaRegistry {
             field("sourceUrl","权威来源","text",false,""),
             field("reviewedAt","资料复核日期","date",false,"")
         ));
-        add("ledger", "收支明细", List.of(
-            field("date","收支日期","date",true,""),
-            field("direction","收支类型","select",true,"EXPENSE:支出|INCOME:收入"),
-            field("amount","金额（元）","number",true,""),
-            field("category","分类","text",true,""),
-            field("notes","备注","textarea",false,"")
-        ));
         add("tasks", "待办任务", List.of(
             field("title","待办事项","text",true,""),
             field("content","说明","textarea",false,""),
@@ -176,6 +169,23 @@ public class SchemaRegistry {
             field("people","和谁","strings",false,""),
             field("tags","标签","strings",false,""),
             field("taskId","关联待办","task",false,"")
+        ));
+        // Restore order follows the foreign key from a selected expense to its trip journal.
+        add("ledger", "收支明细", List.of(
+            field("date","收支日期","date",true,""),
+            field("direction","收支类型","select",true,"EXPENSE:支出|INCOME:收入"),
+            field("amount","金额（元）","number",true,""),
+            field("category","分类","text",true,""),
+            field("notes","备注","textarea",false,""),
+            field("tripId","关联行程","trip",false,""),
+            field("reimbursement","报销状态","select",false,"SELF:自费|PENDING:待报销|REIMBURSED:已报销")
+        ));
+        add("bills","固定账单",List.of(
+            field("title","账单名称","text",true,""),
+            field("category","支出分类","text",true,""),
+            field("amount","每期金额（元）","number",true,""),
+            field("nextDue","下次应付日期","date",true,""),
+            field("monthDay","每月扣款日（1 至 31）","number",true,"")
         ));
     }
     private static Field field(String key,String label,String type,boolean required,String options) {

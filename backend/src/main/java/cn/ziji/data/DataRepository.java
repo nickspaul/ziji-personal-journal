@@ -109,6 +109,7 @@ public class DataRepository {
             Map<String,Object> m=new LinkedHashMap<>();m.put("id",rs.getString("id"));m.put("occurredAt",rs.getTimestamp("occurredAt").toLocalDateTime().toString());m.put("action",rs.getString("action"));m.put("collection",rs.getString("collectionName"));m.put("rowId",rs.getString("rowId"));m.put("before",object(rs.getString("beforeJson")));m.put("after",object(rs.getString("afterJson")));return m;
         },Math.min(5000,Math.max(1,limit)));
     }
+    public void lockSettings() {jdbc.queryForObject("SELECT id FROM zj_settings WHERE id=1 FOR UPDATE",Integer.class);}
     public Map<String,Object> settings() {return object(jdbc.queryForObject("SELECT payload FROM zj_settings WHERE id=1",String.class));}
     public void settings(Map<String,Object> values) {jdbc.update("UPDATE zj_settings SET payload=?,updatedAt=NOW(6) WHERE id=1",json(values));}
 }

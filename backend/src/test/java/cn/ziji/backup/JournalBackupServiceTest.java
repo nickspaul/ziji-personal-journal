@@ -46,6 +46,18 @@ class JournalBackupServiceTest {
         assertEquals(income,store.get("ledger").get(income.get("id")));
         assertEquals(0,service.restore(exported,"merge").get("imported"));
     }
+    @Test void tripLinkAndUpcomingRuleRoundTripSeparatelyFromActualExpenses(){
+        var trip=data.create("journal",Map.of("title","出差","startDate","2025-10-20","category","TRAVEL"));
+        var expense=data.create("ledger",Map.of("date","2025-10-20","category","交通","amount","18.30","tripId",trip.get("id"),"reimbursement","PENDING"));
+        var rule=data.create("bills",Map.of("title","月租","amount","39.90","category","通信","monthDay",31,"nextDue","2025-11-30"));
+        assertFalse(data.state().containsKey("bills"));
+        var exported=service.export();store.values().forEach(Map::clear);
+        assertEquals(true,service.preview(exported).get("valid"));assertEquals(3,service.restore(exported,"merge").get("imported"));
+        assertEquals(1,store.get("ledger").size());
+        assertEquals(trip.get("id"),store.get("ledger").get(expense.get("id")).get("tripId"));
+        assertEquals("PENDING",store.get("ledger").get(expense.get("id")).get("reimbursement"));
+        assertEquals(rule.get("nextDue"),store.get("bills").get(rule.get("id")).get("nextDue"));
+    }
     @Test void legacyBackupWithoutNewCollectionsStillRestores(){
         var old=row();old.putAll(Map.of("measuredAt","2025-10-20T21:00:00","heightCm",172,"weightKg",68.5,"sex","UNSPECIFIED"));
         var backup=backup(Map.of("body",List.of(old)));assertEquals(true,service.preview(backup).get("valid"));
@@ -73,6 +85,22 @@ class JournalBackupServiceTest {
         var backup=backup(Map.of());backup.put("settings",Map.of("journalPinnedFilters",List.of(Map.of("id",UUID.randomUUID().toString(),"name","项目 A","query",Map.of("sql","SELECT 1")))));
         var preview=service.preview(backup);assertEquals(false,preview.get("valid"));assertTrue(preview.get("errors").toString().contains("生活日志设置"));
         backup.put("settings",Map.of("journalView","unknown"));assertEquals(false,service.preview(backup).get("valid"));
+    }
+    @Test void vocabularySurvivesBackupIncludingUnusedAndRetiredNames(){
+        var people=java.util.stream.IntStream.range(0,106).mapToObj(i->"同行人"+i).toList();
+        var vocabulary=Map.of("tag",Map.of("added",List.of("#Work"),"hidden",List.of("旧标签")),
+                              "person",Map.of("added",people));
+        data.updateSettings(Map.of("journalVocabulary",vocabulary));
+        var expected=data.settings().get("journalVocabulary");
+        assertEquals(Map.of("tag",Map.of("added",List.of("work"),"hidden",List.of("旧标签")),
+                            "person",Map.of("added",people)),expected);
+        var backup=service.export();
+        settings.clear();
+        assertEquals(true,service.preview(backup).get("valid"));
+        service.restore(backup,"merge");
+        assertEquals(expected,data.settings().get("journalVocabulary"));
+        backup.put("settings",Map.of("journalVocabulary",Map.of("tag",Map.of("added",List.of("#Work"),"hidden",List.of("work")))));
+        assertEquals(false,service.preview(backup).get("valid"));
     }
     @Test void exportIncludesNewCollectionsAndPinnedFiltersWithoutAddingThemToBootstrap(){
         var task=data.create("tasks",Map.of("title","项目 A 联调"));data.create("journal",Map.of("title","联调进展","startDate","2025-10-20","taskId",task.get("id"),"tags",List.of("项目 A")));

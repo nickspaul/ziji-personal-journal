@@ -1,13 +1,14 @@
 import type {Field, Row} from './types'
 
 export const dataGroups = [
-  {label:'日常记录', collections:['smoking','sessions','drinks','intimacy','journal','tasks','ledger']},
+  {label:'日常记录', collections:['smoking','sessions','drinks','intimacy','journal','tasks','ledger','bills']},
   {label:'种类与身体', collections:['products','body']},
   {label:'参考资料', collections:['prices','health']},
   {label:'兼容数据', collections:['purchases'], legacy:true},
 ]
 
 export const dataGuide:Record<string,{label:string;summary:string;usage:string;rules:string[]}> = {
+  bills:{label:'固定账单',summary:'每月待支付的固定支出。',usage:'在日常记账里查看即将扣款的账单，确认实付后生成流水。',rules:['不足指定扣款日的月份取月末，次月仍按原扣款日计算。','跳过本期只推进扣款日期，已经手动入账的支出可以用此方式处理。']},
   ledger:{label:'收支明细',summary:'按实际收付日期记录人民币收入和支出。',usage:'用于日常记账中的月度收支和分类汇总。',rules:['本月结余 = 本月收入 − 本月支出。','烟酒按用量估算的费用单独显示，只有手动录入的实际付款才计入账本。']},
   smoking:{label:'吸烟记录',summary:'按根数记录，保留当时的单价与烟盒标示。',usage:'用于吸烟趋势、按用量费用、烟盒成分汇总和饮酒关联。',rules:['费用 = 根数 × 保存时的单根价格；单根价格通常由每包价格 ÷ 每包根数得到。别人提供的香烟，个人费用为 0。','焦油等合计 = 标示值 × 根数，仅表示标签值汇总，不代表身体吸收量。','饮酒关联按已录入的时间、时间精度和观察窗口判断；没有找到饮酒记录不等于确定没有喝酒。']},
   sessions:{label:'饮酒场次',summary:'一场聚餐或一次饮酒，对应一条场次和若干酒品明细。',usage:'用于统计饮酒次数、组织酒品明细，并提供饮酒开始和结束时间。',rules:['场次本身不保存酒量、单价或酒精量，这些来自关联的饮酒明细。','有场次却没有明细时，次数仍会统计，但无法知道喝了多少。']},
@@ -23,6 +24,7 @@ export const dataGuide:Record<string,{label:string;summary:string;usage:string;r
 }
 
 export const preferredColumns:Record<string,string[]> = {
+  bills:['title','amount','category','nextDue','monthDay'],
   ledger:['date','direction','category','amount','notes'],
   smoking:['occurredAt','productId','count','source'], sessions:['startedAt','endedAt','context','notes'],
   drinks:['occurredAt','productId','actualMl','snapshotAbv','ethanolEquivalent42Ml'],
@@ -66,7 +68,7 @@ export function matchesRecord(row:Row,fields:Field[],collections:Record<string,R
   const haystack=[...fields.map(f=>valueFor(row,f,collections)),row.id].join(' ').toLocaleLowerCase()
   return words.every(word=>haystack.includes(word))
 }
-export function recordDate(row:Row){return String(row.occurredAt||row.startedAt||row.measuredAt||row.effectiveDate||row.date||row.reviewedAt||row.createdAt||'')}
+export function recordDate(row:Row){return String(row.occurredAt||row.startedAt||row.measuredAt||row.effectiveDate||row.date||row.nextDue||row.reviewedAt||row.createdAt||'')}
 export function compareRecords(a:Row,b:Row,key:string,direction:string,fields:Field[],collections:Record<string,Row[]>){
   const field=fields.find(f=>f.key===key)
   const raw=(r:Row)=>key==='recordDate'?recordDate(r):key==='bmi'?(r.heightCm>0&&r.weightKg>0?r.weightKg/(r.heightCm/100)**2:null):key==='ethanolEquivalent42Ml'?(r.ethanolEquivalent42Ml??(r.ethanolGrams==null?null:r.ethanolGrams/0.33138)):field?.type==='number'?r[key]:field?valueFor(r,field,collections):r[key]

@@ -42,14 +42,26 @@ public class DataValidator {
             unused.forEach(key->m.put(key,null));
         }
         if(SchemaRegistry.isJournalCollection(collection))validateJournal(collection,m,previous,imported);
-        if(collection.equals("ledger")) {
-            validStorageDate(m,"date");
+        if(collection.equals("ledger") || collection.equals("bills")) {
+            validStorageDate(m,collection.equals("ledger")?"date":"nextDue");
             BigDecimal amount=(BigDecimal)m.get("amount");
             if(amount.signum()<=0||amount.stripTrailingZeros().scale()>2)
                 throw new IllegalArgumentException("收支金额必须大于零，最多精确到分");
             String category=m.get("category").toString();
             if(category.codePointCount(0,category.length())>40||category.chars().anyMatch(Character::isISOControl))
                 throw new IllegalArgumentException("收支分类最多40字，不能包含换行或控制字符");
+        }
+        if(collection.equals("ledger") && ((m.get("tripId")==null)!=(m.get("reimbursement")==null)
+                || (m.get("tripId")!=null && !"EXPENSE".equals(m.get("direction")))))
+            throw new IllegalArgumentException("只有支出可以关联行程，请同时选择行程和报销状态，或同时清空");
+        if(collection.equals("bills")) {
+            range(m,"monthDay","1","31",true);
+            String title=(String)m.get("title");
+            if(title.codePointCount(0,title.length())>100 || title.chars().anyMatch(Character::isISOControl))
+                throw new IllegalArgumentException("账单名称最多100字，不能包含换行");
+            LocalDate due=LocalDate.parse(m.get("nextDue").toString());
+            if(due.getDayOfMonth()!=Math.min(due.lengthOfMonth(),((BigDecimal)m.get("monthDay")).intValueExact()))
+                throw new IllegalArgumentException("应付日期应与每月扣款日一致，短月取月末");
         }
         validateRanges(collection,m,!imported&&(previous==null||!Boolean.TRUE.equals(previous.get("priceConfirmed"))));
         return m;
@@ -81,7 +93,7 @@ public class DataValidator {
                         ? LocalDate.parse(text).atStartOfDay().toString()
                         : LocalDateTime.parse(text).withNano(0).toString();
                 }
-                case "product","session","purchase","task" -> uuid(value);
+                case "product","session","purchase","task","trip" -> uuid(value);
                 case "select" -> {
                     String s=value.toString();if(f.options().stream().noneMatch(o->o.get("value").equals(s)))throw new IllegalArgumentException();yield s;
                 }

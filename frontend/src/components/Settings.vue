@@ -6,7 +6,8 @@ import {state,api,saveSettings,refresh} from '../api'
 import type {Row} from '../types'
 import {shortDate,localNow,collectionLabels} from '../types'
 const emit=defineEmits<{edit:[collection:string,row?:Row,preset?:Record<string,any>];changed:[];notify:[message:string];lock:[];view:[page:string]}>()
-const form=reactive({...state.settings}),busy=ref(false),error=ref(''),backupFile=ref<any>(null),preview=ref<any>(null),backupName=ref(''),fileInput=ref<HTMLInputElement>(),restoreOpen=ref(false)
+const preferenceFields=['theme','reducedMotion','hidden','reminderMode','quietStart','quietEnd','dailyReminderLimit','recentAlcoholHours']
+const form=reactive(Object.fromEntries(preferenceFields.map(key=>[key,state.settings[key]]))),busy=ref(false),error=ref(''),backupFile=ref<any>(null),preview=ref<any>(null),backupName=ref(''),fileInput=ref<HTMLInputElement>(),restoreOpen=ref(false)
 const latestBody=computed(()=>sortBodyRows(state.collections.body||[])[0])
 async function save(){busy.value=true;error.value='';try{await saveSettings(form);emit('notify','偏好已保存。');emit('changed')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
 async function downloadBackup(){busy.value=true;error.value='';try{const data=await api('/backup');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download=`自记-完整备份-${localNow().replaceAll(':','-')}.json`;a.click();URL.revokeObjectURL(a.href);emit('notify','备份已下载，请妥善保管。')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}

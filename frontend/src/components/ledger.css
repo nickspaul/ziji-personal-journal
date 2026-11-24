@@ -118,9 +118,10 @@
 .amount-field b { font-size: 27px; color: var(--ledger-green); }
 .amount-field input { padding: 3px 4px; border: 0; background: none; border-radius: 3px; color: var(--text); font-size: 33px; font-weight: 600; }
 .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
-.category-picks { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 14px; }
-.category-picks button { border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-.category-picks button[aria-pressed=true] { border-color: var(--ledger-green); color: var(--ledger-green); }
+.category-picks { display: grid; grid-template-columns: repeat(auto-fit,minmax(68px,1fr)); gap: 5px; max-height: 10rem; overflow-y: auto; padding: 2px; margin: 6px 0 12px; }
+.category-picks button { min-height: 31px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.category-picks button:hover, .category-picks button:focus-visible { border-color: var(--ledger-green); }
+.category-picks button[aria-pressed=true] { border-color: var(--ledger-green); background: var(--mint-bg); color: var(--ledger-green); font-weight: 600; }
 .entry-note textarea { line-height: 1.4; }
 .entry-dialog footer { justify-content: end; gap: 7px; margin-top: 14px; }
 @media(max-width:1080px) {

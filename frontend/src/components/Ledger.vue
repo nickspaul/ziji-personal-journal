@@ -5,6 +5,7 @@ import { api, deleteRow, saveRow } from '../api'
 import { shanghaiDate } from '../types'
 import { adjacentPeriod, anchorInMonth, cashflow, categoryRanking, dayGroups, matchingRows, periodHistory, periodKey, weekColumn } from '../ledgerReview'
 import type { Direction, DirectionFilter, LedgerPeriod, LedgerRow } from '../ledgerReview'
+import MonthlyBills from './MonthlyBills.vue'
 
 const props = defineProps<{ refreshKey?: number }>()
 const emit = defineEmits<{ notify: [message: string] }>()
@@ -158,6 +159,7 @@ async function save() {
   try {
     const saved = await saveRow('ledger', {
       ...fields, id: editing.value?.id || entryId.value, amount, category: fields.category.trim(), notes: fields.notes.trim(),
+      ...(editing.value?.tripId && fields.direction==='INCOME' ? {tripId:null,reimbursement:null} : {}),
     }, editing.value) as LedgerRow
     rows.value = [saved, ...rows.value.filter(row => row.id !== saved.id)]
     if (loading.value) void load()
@@ -249,6 +251,7 @@ async function remove(row: LedgerRow) {
         </section>
       </div>
 
+      <MonthlyBills :rows="rows" :refresh-key="refreshKey" @changed="load" @notify="emit('notify',$event)"/>
       <section class="panel flow-panel" aria-label="收支明细">
         <header><h2 ref="listTitle" tabindex="-1">收支明细</h2><span class="quiet sensitive">{{ filtered.length }} 笔</span></header>
         <div class="filters">
@@ -293,13 +296,17 @@ async function remove(row: LedgerRow) {
           <div class="entry-direction" role="group" aria-label="收支类型"><button type="button" :aria-pressed="form.direction==='EXPENSE'" @click="setDirection('EXPENSE')"><ArrowUpRight :size="17"/>支出</button><button type="button" :aria-pressed="form.direction==='INCOME'" @click="setDirection('INCOME')"><ArrowDownLeft :size="17"/>收入</button></div>
           <label class="amount-field"><span>金额（元）</span><div><b>¥</b><input ref="amountInput" v-model="form.amount" type="text" inputmode="decimal" placeholder="0.00" maxlength="16" required/></div></label>
           <div class="entry-grid">
-            <label>类别<input v-model="form.category" list="ledger-categories" maxlength="40" placeholder="选择或输入类别" required/><datalist id="ledger-categories"><option v-for="item in categories" :key="item" :value="item"/></datalist></label>
+            <label>类别<input v-model="form.category" maxlength="40" placeholder="点选下方类别或自行输入" required/></label>
             <label>日期<input v-model="form.date" type="date" min="1000-01-01" max="9999-12-31" required/></label>
           </div>
-          <div class="category-picks" aria-label="快捷类别"><button v-for="category in categories.slice(0,6)" :key="category" type="button" :aria-pressed="form.category===category" @click="form.category=category">{{ category }}</button></div>
+          <div class="category-picks" role="group" :aria-label="directionName(form.direction)+'类别'">
+            <button v-for="category in categories" :key="category" type="button"
+              :aria-pressed="form.category===category" @click="form.category=category">{{ category }}</button>
+          </div>
           <label class="entry-note">备注 <textarea v-model="form.notes" rows="2" maxlength="10000" placeholder="选填，例如和同事吃午饭"/></label>
         </fieldset>
         <p v-if="formError" class="error-box" role="alert">{{ formError }}</p>
+        <p v-if="editing?.tripId && form.direction==='INCOME'" class="hint">保存为收入后，这笔流水会从原行程的支出中移除。</p>
         <footer><button type="button" class="button secondary" :disabled="busy" @click="closeEditor">取消</button><button class="button primary" :disabled="busy || loading || !!loadError">{{ busy?'保存中…':editing?'保存修改':'保存账目' }}</button></footer>
       </form>
     </dialog>

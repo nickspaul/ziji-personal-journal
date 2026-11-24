@@ -15,7 +15,7 @@ const selectedCollection=ref(props.collection||'smoking'),search=ref(''),page=re
 const trash=ref(false),fetchedRows=ref<Row[]>([]),rowsLoading=ref(false),error=ref(''),busy=ref(false)
 const selected=ref<string[]>([]),confirmDelete=ref<Row[]|null>(null),inspecting=ref<Row|null>(null),audit=ref<any[]|null>(null),recalcRow=ref<Row|null>(null)
 const sortKey=ref('recordDate'),sortDirection=ref('desc'),columnChoices=ref<Record<string,string[]>>({}),legacyOpen=ref(false),guideOpen=ref(false)
-const icons:Record<string,any>={smoking:Cigarette,sessions:Wine,drinks:Wine,intimacy:Heart,journal:BookOpen,tasks:CheckSquare,products:Package,body:Activity,prices:FileClock,health:FileText,purchases:Archive,ledger:Wallet}
+const icons:Record<string,any>={smoking:Cigarette,sessions:Wine,drinks:Wine,intimacy:Heart,journal:BookOpen,tasks:CheckSquare,products:Package,body:Activity,prices:FileClock,health:FileText,purchases:Archive,ledger:Wallet,bills:Wallet}
 const groups=computed(()=>dataGroups.map(g=>({...g,collections:g.collections.filter(c=>state.schema.some(s=>s.name===c))})).filter(g=>g.collections.length))
 const label=(name:string)=>dataGuide[name]?.label||collectionLabels[name]||name
 const guide=computed(()=>dataGuide[selectedCollection.value])
@@ -24,7 +24,7 @@ const pagedCollection=computed(()=>['journal','tasks'].includes(selectedCollecti
 const availableFields=computed(()=>[...(schema.value?.fields||[]),...(derivedColumns[selectedCollection.value]||[]).filter(f=>!schema.value?.fields.some(s=>s.key===f.key))])
 const chosenColumns=computed({get:()=>columnChoices.value[selectedCollection.value]||preferredColumns[selectedCollection.value]||availableFields.value.slice(0,6).map(f=>f.key),set:(v:string[])=>columnChoices.value[selectedCollection.value]=v})
 const displayFields=computed(()=>chosenColumns.value.map(key=>availableFields.value.find(f=>f.key===key)).filter(Boolean) as Field[])
-const rows=computed(()=>(trash.value||selectedCollection.value==='ledger')?fetchedRows.value:state.collections[selectedCollection.value]||[])
+const rows=computed(()=>(trash.value||['ledger','bills'].includes(selectedCollection.value))?fetchedRows.value:state.collections[selectedCollection.value]||[])
 const filtered=computed(()=>rows.value.filter(r=>matchesRecord(r,availableFields.value,state.collections,search.value)).sort((a,b)=>compareRecords(a,b,sortKey.value,sortDirection.value,availableFields.value,state.collections)))
 const pages=computed(()=>Math.max(1,Math.ceil(filtered.value.length/pageSize.value)))
 const visible=computed(()=>filtered.value.slice((page.value-1)*pageSize.value,page.value*pageSize.value))
@@ -40,7 +40,7 @@ async function loadRows() {
   const deleted = trash.value
   fetchedRows.value = []
   rowsLoading.value = false
-  if (pagedCollection.value || (!deleted && collection !== 'ledger')) return
+  if (pagedCollection.value || (!deleted && !['ledger','bills'].includes(collection))) return
   rowsLoading.value = true
   try {
     const result = await api<Row[]>(`/data/${collection}${deleted ? '?deleted=true' : ''}`)
@@ -92,7 +92,7 @@ function auditTitle(item:any){const row=item.after||item.before||{};return row.t
         <h4 v-else>{{group.label}}</h4>
         <div v-if="!group.legacy||legacyOpen" class="data-nav-group">
           <button v-for="name in group.collections" :key="name" :class="{active:selectedCollection===name}" :aria-current="selectedCollection===name?'page':undefined" @click="selectedCollection=name">
-            <component :is="icons[name]||Database" :size="15"/><span>{{label(name)}}</span><small v-if="!['journal','tasks','ledger'].includes(name)" class="sensitive">{{state.collections[name]?.length||0}}</small>
+            <component :is="icons[name]||Database" :size="15"/><span>{{label(name)}}</span><small v-if="!['journal','tasks','ledger','bills'].includes(name)" class="sensitive">{{state.collections[name]?.length||0}}</small>
           </button>
         </div>
       </template>

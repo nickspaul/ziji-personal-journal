@@ -170,11 +170,24 @@ public class JournalQueryService {
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public Map<String,Object> facets(String query) {
         String q=query==null?"":query.trim();bounded(q,500,"搜索内容");
-        List<Map<String,Object>> tags=jdbc.queryForList("SELECT name,COUNT(*) AS count FROM (SELECT jt.label AS name FROM zj_journal r JOIN JSON_TABLE(COALESCE(r.tags,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) PATH '$')) jt WHERE r.deleted=FALSE UNION ALL SELECT tt.label AS name FROM zj_tasks t JOIN JSON_TABLE(COALESCE(t.tags,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) PATH '$')) tt WHERE t.deleted=FALSE) labels GROUP BY name ORDER BY count DESC,name LIMIT 100");
-        List<String> people=jdbc.queryForList("SELECT DISTINCT jt.label FROM zj_journal r JOIN JSON_TABLE(COALESCE(r.people,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) PATH '$')) jt WHERE r.deleted=FALSE ORDER BY jt.label LIMIT 100",String.class);
+        List<Map<String,Object>> tags=jdbc.queryForList("""
+                SELECT name, SUM(active) AS count FROM (
+                    SELECT jt.label COLLATE utf8mb4_bin AS name, r.deleted=FALSE AS active FROM zj_journal r
+                    JOIN JSON_TABLE(COALESCE(r.tags,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) CHARACTER SET utf8mb4 PATH '$')) jt
+                    UNION ALL
+                    SELECT tt.label COLLATE utf8mb4_bin, t.deleted=FALSE FROM zj_tasks t
+                    JOIN JSON_TABLE(COALESCE(t.tags,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) CHARACTER SET utf8mb4 PATH '$')) tt
+                ) labels GROUP BY name ORDER BY count DESC,name
+                """);
+        List<String> people=jdbc.queryForList("""
+                SELECT DISTINCT jt.label COLLATE utf8mb4_bin AS name FROM zj_journal r
+                JOIN JSON_TABLE(COALESCE(r.people,JSON_ARRAY()),'$[*]' COLUMNS(label VARCHAR(100) CHARACTER SET utf8mb4 PATH '$')) jt
+                ORDER BY name
+                """,String.class);
         List<String> places=jdbc.queryForList("SELECT DISTINCT place FROM zj_journal WHERE deleted=FALSE AND place IS NOT NULL AND place<>'' ORDER BY place LIMIT 100",String.class);
         List<Map<String,Object>> tasks=jdbc.queryForList("SELECT id,title,status FROM zj_tasks WHERE deleted=FALSE AND LOWER(title) LIKE ? ESCAPE '!' ORDER BY CASE WHEN status IN ('TODO','DOING') THEN 0 WHEN status='PAUSED' THEN 1 ELSE 2 END,important DESC,updatedAt DESC,id DESC LIMIT 100",like(q));
-        return Map.of("tags",tags,"people",people,"places",places,"tasks",tasks);
+        Object vocabulary=data.settings().get("journalVocabulary");
+        return Map.of("tags",JournalTermService.visibleTags(tags,vocabulary),"people",JournalTermService.visiblePeople(people,vocabulary),"places",places,"tasks",tasks);
     }
 
     private record TagPlan(String from,String to,List<Map<String,Object>> affected,List<Object> pinned,String token) {}
@@ -198,25 +211,14 @@ public class JournalQueryService {
         Map<String,Object> result=new LinkedHashMap<>();result.put("from",p.from);result.put("to",p.to);result.put("count",p.affected.size());
         result.put("journalCount",journals);result.put("taskCount",p.affected.size()-journals);result.put("pinnedChanged",!Objects.equals(p.pinned,renamed));result.put("previewToken",p.token);
         result.put("trashCount",p.affected.stream().filter(r->Boolean.TRUE.equals(r.get("deleted"))).count());
-        result.put("message",p.from.equals(p.to)?"标签名称相同，无需修改":"更新使用此标签的日志、任务及固定筛选，包括回收站中的记录；正文和删除状态保持不变。");return result;
+        result.put("message",p.from.equals(p.to)?"标签名称相同，无需修改":"请刷新页面，在标签管理中逐条选择改名或保留。");return result;
     }
 
-    @Transactional(isolation=Isolation.SERIALIZABLE)
+    /** Old clients must collect a decision for each record before requesting any change. */
     public Map<String,Object> renameTag(Map<String,Object> request) {
-        Object token=request.get("previewToken");if(!(token instanceof String s)||s.length()!=64)throw invalid("请先预览标签修改");
-        TagPlan p=tagPlan(request);if(!p.token.equals(token))throw new ApiException(409,"标签使用情况已变化，请重新预览");
-        for(var affected:p.affected){
-            String collection=affected.get("collection").toString(),id=affected.get("id").toString();
-            List<String> tags=renamedTags(asList(affected.get("tags")),p.from,p.to);
-            Map<String,Object> before=data.require(collection,id);long version=DataService.version(affected.get("version"));
-            if(DataService.version(before.get("version"))!=version)throw ApiException.conflict();
-            Map<String,Object> after=new LinkedHashMap<>(before);after.put("tags",tags);after.put("version",version+1);after.put("updatedAt",DataValidator.now());
-            if(!repository.update(collection,after,version))throw ApiException.conflict();
-            repository.audit("RENAME_TAG",collection,id,before,after);
-        }
-        List<Object> pinned=renamePinned(p.pinned,p.from,p.to);
-        if(!Objects.equals(p.pinned,pinned))data.updateSettings(Map.of("journalPinnedFilters",pinned));
-        return Map.of("updated",p.affected.size(),"from",p.from,"to",p.to,"message",p.affected.isEmpty()?"没有需要修改的记录":"标签已更新，原始记录内容已保留");
+        String from=tag(requiredText(request,"from")),to=tag(requiredText(request,"to"));
+        if(from.equals(to))return Map.of("updated",0,"from",from,"to",to);
+        throw new ApiException(409,"请刷新页面，在标签管理中逐条确认需要修改的记录");
     }
 
     static List<Object> renamePinned(List<Object> source,String from,String to) {
@@ -231,7 +233,11 @@ public class JournalQueryService {
                 Matcher words=TERMS.matcher(text);StringBuilder changed=new StringBuilder();
                 while(words.find()){
                     String word=words.group();String replacement=word;
-                    if(word.startsWith("#")&&word.length()>1&&tag(words.group(1)==null?word:unquote(words.group(1))).equals(from))replacement=tagToken(to);
+                    if(word.startsWith("#")&&word.length()>1){
+                        String name=words.group(1)==null?word:unquote(words.group(1));
+                        // A saved free-text search can contain an incomplete hash token.
+                        if(name.trim().replaceFirst("^#+","").trim().toLowerCase(Locale.ROOT).equals(from))replacement=tagToken(to);
+                    }
                     words.appendReplacement(changed,Matcher.quoteReplacement(replacement));
                 }
                 words.appendTail(changed);filter.put("q",changed.toString());
@@ -256,6 +262,6 @@ public class JournalQueryService {
     private static boolean bool(MultiValueMap<String,String> p,String key,boolean fallback){String v=value(p,key,String.valueOf(fallback));if(!Set.of("true","false").contains(v))throw invalid("筛选开关不正确");return Boolean.parseBoolean(v);}
     private static LocalDate date(String value){if(value==null||value.isBlank())return null;try{return LocalDate.parse(value);}catch(Exception e){throw invalid("日期格式应为 YYYY-MM-DD");}}
     private static void bounded(String value,int max,String label){if(value.length()>max)throw invalid(label+"过长");}
-    private static String digest(String text){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException("无法生成标签预览",e);}}
+    static String digest(String text){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException("无法生成预览",e);}}
     private static IllegalArgumentException invalid(String message){return new IllegalArgumentException(message);}
 }

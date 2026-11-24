@@ -102,6 +102,12 @@ class JournalQueryServiceTest {
         assertEquals(List.of("出差","项目 a"),((Map<?,?>)((Map<?,?>)pinned.get(0)).get("query")).get("tags"));
     }
 
+    @Test void unrelatedIncompleteHashTokenInSavedSearchSurvivesRename() {
+        var pin=Map.of("name","测试","query",Map.of("q","## #项目"));
+        var result=JournalQueryService.renamePinned(List.of(pin),"项目","工作");
+        assertEquals(List.of(Map.of("name","测试","query",Map.of("q","## #工作"))),result);
+    }
+
     private record Fixture(JournalQueryService service,JdbcTemplate jdbc,DataRepository repository,DataService data,Map<String,Object> row) {}
     @SuppressWarnings({"unchecked","rawtypes"})
     private Fixture tagFixture() throws Exception {
@@ -115,22 +121,21 @@ class JournalQueryServiceTest {
         return new Fixture(new JournalQueryService(jdbc,repository,data,mock(TaskEffortService.class)),jdbc,repository,data,row);
     }
 
-    @Test void tagRenameIncludesTrashWithoutRestoringItOrChangingContents() throws Exception {
+    @Test void retiredBulkEndpointCannotRenameWithoutIndividualDecisions() throws Exception {
         var f=tagFixture();var request=new LinkedHashMap<String,Object>(Map.of("from","出差","to","差旅"));
         var preview=f.service.previewTag(request);assertEquals(1,preview.get("count"));assertEquals(1L,preview.get("trashCount"));
-        request.put("previewToken",preview.get("previewToken"));assertEquals(1,f.service.renameTag(request).get("updated"));
-        @SuppressWarnings({"unchecked","rawtypes"}) ArgumentCaptor<Map<String,Object>> captured=ArgumentCaptor.forClass(Map.class);
-        verify(f.repository).update(eq("journal"),captured.capture(),eq(1L));var after=captured.getValue();
-        assertEquals(true,after.get("deleted"));assertEquals("正文不变",after.get("content"));assertEquals("旧经历",after.get("title"));
-        assertEquals(List.of("差旅","客户"),after.get("tags"));assertEquals(2L,after.get("version"));
-        verify(f.repository).audit(eq("RENAME_TAG"),eq("journal"),eq(f.row.get("id").toString()),eq(f.row),eq(after));
-        verify(f.data,never()).update(anyString(),anyString(),anyMap());
+        request.put("previewToken",preview.get("previewToken"));
+        assertThrows(ApiException.class,()->f.service.renameTag(request));
+        verify(f.repository,never()).update(anyString(),anyMap(),anyLong());
     }
 
-    @Test void tagRenameRejectsStalePreviewWithoutWriting() throws Exception {
-        var f=tagFixture();var request=new LinkedHashMap<String,Object>(Map.of("from","出差","to","差旅"));
-        request.put("previewToken",f.service.previewTag(request).get("previewToken"));f.row.put("version",2L);
-        assertThrows(ApiException.class,()->f.service.renameTag(request));verify(f.repository,never()).update(anyString(),anyMap(),anyLong());
+    @Test void staleIndividualPreviewIsRejectedBeforeAnyRowsOrSettingsAreWritten() throws Exception {
+        var f=tagFixture();var terms=new JournalTermService(f.jdbc,f.repository,f.data);
+        var request=new LinkedHashMap<String,Object>(Map.of("kind","tag","from","出差","to","差旅"));
+        request.put("previewToken",terms.preview(request).get("previewToken"));f.row.put("version",2L);
+        request.put("decisions",List.of(Map.of("collection","journal","id",f.row.get("id"),"change",true)));
+        assertThrows(ApiException.class,()->terms.apply(request));verify(f.repository,never()).update(anyString(),anyMap(),anyLong());
+        verify(f.data,never()).updateSettings(anyMap());
     }
 
     @Test void sameNormalizedTagIsANoop() throws Exception {
@@ -138,5 +143,90 @@ class JournalQueryServiceTest {
         var preview=f.service.previewTag(request);assertEquals(0,preview.get("count"));request.put("previewToken",preview.get("previewToken"));
         assertEquals(0,f.service.renameTag(request).get("updated"));verify(f.repository,never()).update(anyString(),anyMap(),anyLong());
         verify(f.repository,never()).audit(anyString(),anyString(),anyString(),any(),any());verify(f.data,never()).updateSettings(anyMap());
+    }
+
+    @Test @SuppressWarnings({"unchecked","rawtypes"})
+    void selectiveTagRenameMergesOnlyAcceptedRowsAndKeepsOriginalSearch() throws Exception {
+        var f=tagFixture();var terms=new JournalTermService(f.jdbc,f.repository,f.data);
+        f.row.put("tags",List.of("出差","差旅","客户"));
+        var task=Map.<String,Object>of("id","other","version",3L,"title","会议","tags",List.of("出差"),"plannedDate","2026-11-24");
+        doAnswer(call->call.<String>getArgument(0).contains("zj_tasks")?List.of(task):List.of(f.row))
+                .when(f.jdbc).query(anyString(),any(RowMapper.class),any(Object[].class));
+        var pins=List.of(Map.of("id","pin","query",Map.of("tags",List.of("出差"),"q","出差 #出差")));
+        when(f.data.settings()).thenReturn(Map.of("journalPinnedFilters",pins));
+        var request=new LinkedHashMap<String,Object>(Map.of("kind","tag","from","出差","to","差旅"));
+        var preview=terms.preview(request);assertEquals(2,preview.get("count"));assertEquals(true,preview.get("pinnedChanged"));
+        var rows=(List<Map<String,Object>>)preview.get("rows");assertEquals(true,rows.get(0).get("deleted"));assertEquals("2026-11-24",rows.get(1).get("date"));
+        request.put("previewToken",preview.get("previewToken"));
+        var accept=Map.of("collection","journal","id",f.row.get("id"),"change",true);
+        request.put("decisions",List.of(accept));assertThrows(IllegalArgumentException.class,()->terms.apply(request));
+        request.put("decisions",List.of(accept,accept));assertThrows(IllegalArgumentException.class,()->terms.apply(request));
+        request.put("decisions",List.of(accept,Map.of("collection","tasks","id","other","change","false")));
+        assertThrows(IllegalArgumentException.class,()->terms.apply(request));
+        verify(f.repository,never()).update(anyString(),anyMap(),anyLong());
+        request.put("decisions",List.of(accept,Map.of("collection","tasks","id","other","change",false)));
+        assertEquals(Map.of("updated",1,"retained",1,"pinnedChanged",false),terms.apply(request));
+        ArgumentCaptor<Map<String,Object>> captured=ArgumentCaptor.forClass(Map.class);
+        verify(f.repository).update(eq("journal"),captured.capture(),eq(1L));var after=captured.getValue();
+        assertEquals(List.of("差旅","客户"),after.get("tags"));assertEquals(true,after.get("deleted"));
+        assertEquals("正文不变",after.get("content"));assertEquals(2L,after.get("version"));
+        verify(f.repository).audit("RENAME_TAG","journal",f.row.get("id").toString(),f.row,after);
+        verify(f.repository,never()).update(eq("tasks"),anyMap(),anyLong());
+        verify(f.data).updateSettings(captured.capture());var settings=captured.getValue();
+        assertFalse(settings.containsKey("journalPinnedFilters"));
+        assertEquals(List.of(Map.of("name","差旅","count",0)),JournalTermService.visibleTags(
+                List.of(Map.of("name","出差","count",1)),settings.get("journalVocabulary")));
+    }
+
+    @Test @SuppressWarnings({"unchecked","rawtypes"})
+    void templateTagStaysRetiredEvenWhenAllPreviouslyTaggedRowsAreUpdated() throws Exception {
+        var f=tagFixture();var terms=new JournalTermService(f.jdbc,f.repository,f.data);
+        var request=new LinkedHashMap<String,Object>(Map.of("kind","tag","from","出差","to","差旅"));
+        request.put("previewToken",terms.preview(request).get("previewToken"));
+        request.put("decisions",List.of(Map.of("id",f.row.get("id"),"collection","journal","change",true)));
+        var result=terms.apply(request);assertEquals(0,result.get("retained"));
+        ArgumentCaptor<Map<String,Object>> capture=ArgumentCaptor.forClass(Map.class);
+        verify(f.data).updateSettings(capture.capture());var settings=capture.getValue();
+        assertEquals(List.of(Map.of("name","差旅","count",0)),JournalTermService.visibleTags(
+                List.of(Map.of("name","出差","count",1)),settings.get("journalVocabulary")));
+    }
+
+    @Test @SuppressWarnings({"unchecked","rawtypes"})
+    void removingPersonNeverWidensPinnedSearchAndPreservesRemainingNames() throws Exception {
+        var f=tagFixture();var terms=new JournalTermService(f.jdbc,f.repository,f.data);
+        f.row.put("people",List.of("Alex","alex"));
+        var pins=List.of(Map.of("name","聚餐","query",Map.of("person","Alex")));
+        when(f.data.settings()).thenReturn(Map.of("journalPinnedFilters",pins));
+        var request=new LinkedHashMap<String,Object>(Map.of("kind","person","from","Alex"));
+        var preview=terms.preview(request);assertEquals(1,preview.get("count"));assertEquals(false,preview.get("pinnedChanged"));
+        request.put("previewToken",preview.get("previewToken"));
+        request.put("decisions",List.of(Map.of("collection","journal","id",f.row.get("id"),"change",true)));
+        assertEquals(Map.of("updated",1,"retained",0,"pinnedChanged",false),terms.apply(request));
+        ArgumentCaptor<Map<String,Object>> capture=ArgumentCaptor.forClass(Map.class);
+        verify(f.repository).update(eq("journal"),capture.capture(),eq(1L));
+        assertEquals(List.of("alex"),capture.getValue().get("people"));assertEquals(f.row.get("tags"),capture.getValue().get("tags"));
+        verify(f.data).updateSettings(capture.capture());assertFalse(capture.getValue().containsKey("journalPinnedFilters"));
+        verify(f.jdbc,never()).query(contains("zj_tasks"),any(RowMapper.class),any(Object[].class));
+    }
+
+    @Test @SuppressWarnings({"unchecked","rawtypes"})
+    void unusedNamesCanBeAddedAndRenamedIncludingTheirPinnedPersonFilter() throws Exception {
+        var f=tagFixture();var terms=new JournalTermService(f.jdbc,f.repository,f.data);
+        doReturn(List.of()).when(f.jdbc).query(anyString(),any(RowMapper.class),any(Object[].class));
+        ArgumentCaptor<Map<String,Object>> capture=ArgumentCaptor.forClass(Map.class);
+        assertEquals(Map.of("kind","person","name","Alex"),terms.add(Map.of("kind","person","name"," Alex ")));
+        verify(f.data).updateSettings(capture.capture());var vocabulary=capture.getValue().get("journalVocabulary");
+        var pins=List.of(Map.of("name","同事","query",Map.of("person","Alex","q","Alex")));
+        when(f.data.settings()).thenReturn(Map.of("journalVocabulary",vocabulary,"journalPinnedFilters",pins));
+        var request=new LinkedHashMap<String,Object>(Map.of("kind","person","from","Alex","to","小林"));
+        var preview=terms.preview(request);assertEquals(0,preview.get("count"));request.put("previewToken",preview.get("previewToken"));
+        request.put("decisions",List.of());assertEquals(true,terms.apply(request).get("pinnedChanged"));
+        verify(f.data,times(2)).updateSettings(capture.capture());var finalSettings=capture.getValue();
+        assertEquals(List.of("小林"),JournalTermService.visiblePeople(List.of("Alex"),finalSettings.get("journalVocabulary")));
+        assertEquals(List.of(Map.of("name","同事","query",Map.of("person","小林","q","Alex"))),finalSettings.get("journalPinnedFilters"));
+        when(f.data.settings()).thenReturn(finalSettings);
+        terms.add(Map.of("kind","person","name","Alex"));
+        verify(f.data,times(3)).updateSettings(capture.capture());
+        assertEquals(List.of("Alex","小林"),JournalTermService.visiblePeople(List.of("Alex"),capture.getValue().get("journalVocabulary")));
     }
 }

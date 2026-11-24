@@ -9,6 +9,12 @@
 !.env.example
 *.local
 ziji-backup*.json
+自记-完整备份-*.json
+自记记录_*_至_*.md
+自记记录_*_至_*.json
+自记-*.csv
+生活日志.csv
+待办任务.csv
 
 # Generated dependencies and build output
 /backend/target/

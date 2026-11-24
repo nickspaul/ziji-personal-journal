@@ -11,7 +11,7 @@ export function privateActivityLabel(type: unknown) {
   return type === 'SEX' ? privateActivityLabels.SEX : '类型待核对'
 }
 export const kindLabels:Record<string,string> = {SMOKING:'吸烟',ALCOHOL:'饮酒',INTIMACY:'私人行为'}
-export const collectionLabels:Record<string,string> = {ledger:'收支明细',journal:'生活日志',tasks:'待办任务',products:'商品资料',prices:'价格历史',purchases:'购买流水',smoking:'吸烟记录',sessions:'饮酒场次',drinks:'饮酒明细',intimacy:'私人记录',body:'身体测量',health:'健康资料'}
+export const collectionLabels:Record<string,string> = {bills:'固定账单',ledger:'收支明细',journal:'生活日志',tasks:'待办任务',products:'商品资料',prices:'价格历史',purchases:'购买流水',smoking:'吸烟记录',sessions:'饮酒场次',drinks:'饮酒明细',intimacy:'私人记录',body:'身体测量',health:'健康资料'}
 export const shanghaiDate = () => new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
 export const localNow = () => new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace(' ','T')
 export const money = (value:any) => value==null?'待补价格':`¥${Number(value).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`
