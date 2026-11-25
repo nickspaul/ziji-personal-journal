@@ -70,6 +70,16 @@ public class DataRepository {
         List<Map<String,Object>> result=jdbc.query("SELECT * FROM "+c.table()+" WHERE id=?",(rs,n)->row(c,rs),id);
         return result.isEmpty()?null:result.get(0);
     }
+    public List<Map<String,Object>> debtHistoryExcept(String platform,String id) {
+        return jdbc.query("SELECT `date`,debtKind,debtPlatform,amount,debtFee FROM zj_ledger WHERE deleted=FALSE AND debtPlatform=? AND id<>?",
+            (rs,n)->{
+                Map<String,Object> row = new LinkedHashMap<>();
+                row.put("date",rs.getDate("date").toLocalDate().toString());
+                row.put("debtKind",rs.getString("debtKind"));row.put("debtPlatform",rs.getString("debtPlatform"));
+                row.put("amount",rs.getBigDecimal("amount"));row.put("debtFee",rs.getBigDecimal("debtFee"));
+                return row;
+            },platform,id);
+    }
     private Object value(SchemaRegistry.Field field,Object value) {
         if(value==null)return null;
         return switch(field.type()) {

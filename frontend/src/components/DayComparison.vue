@@ -4,7 +4,7 @@ import { CalendarDays, ChevronDown, Cigarette, Wine } from 'lucide-vue-next'
 import { api, state } from '../api'
 import { compareDays, matchesScene, scenes, type JournalSpan, type Measure, type Scene } from '../dayComparison'
 import { recordName } from '../productPricing'
-import { localNow, number, shortDate, shortTime, type Row } from '../types'
+import { localNow, number, shortTime, type Row } from '../types'
 
 const props = defineProps<{from:string;to:string}>()
 const measure = ref<Measure>('alcohol'), scene = ref<Scene>('weekday'), term = ref('')
@@ -94,7 +94,7 @@ function timeLabel(at:string,precision:string) {
     <template v-if="state.settings.hidden"><h3>日期对照</h3><p class="small-note">隐私遮挡已开启。</p></template>
     <template v-else>
     <header>
-      <div><h3>哪些日子更常{{behavior}}？</h3><p>{{ shortDate(from) }} 至 {{ shortDate(to) }} · 占比按每组全部日期计算</p></div>
+      <div><h3>哪些日子更常{{behavior}}？</h3><p>占比按每组全部日期计算</p></div>
       <div class="segmented" role="group" aria-label="比较行为">
         <button type="button" :class="{active:measure==='alcohol'}" :aria-pressed="measure==='alcohol'" @click="measure='alcohol'"><Wine :size="14"/>饮酒</button>
         <button type="button" :class="{active:measure==='smoking'}" :aria-pressed="measure==='smoking'" @click="measure='smoking'"><Cigarette :size="14"/>吸烟</button>
@@ -149,22 +149,22 @@ function timeLabel(at:string,precision:string) {
 </template>
 
 <style scoped>
-.comparison-panel {padding:18px 22px;min-width:0}
+.comparison-panel {padding:15px 18px;min-width:0}
 .comparison-panel header,.controls,.controls label,.comparison-panel .segmented button,.dates,.sources h4 {display:flex;align-items:center;gap:8px}
 .comparison-panel header {justify-content:space-between;flex-wrap:wrap}
 .comparison-panel h3 {margin:0;font-size:17px}
 .comparison-panel header p,.small-note,.detail p {margin:5px 0;color:var(--muted);font-size:12px;line-height:1.65}
 .controls {margin:14px 0 8px;flex-wrap:wrap}
-.controls label {font-size:12px;color:var(--muted)}
-.controls select {font:inherit;color:var(--text);background:var(--input);border:1px solid var(--border);border-radius:6px;padding:5px 9px;max-width:220px}
+.controls label {font-size:12px;color:var(--muted);white-space:nowrap;max-width:100%}
+.controls select {font:inherit;color:var(--text);background:var(--input);border:1px solid var(--border);border-radius:6px;padding:5px 9px;width:auto;max-width:min(220px,62vw)}
 table {width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
 th,td {padding:6px 9px;text-align:right;border-bottom:1px solid var(--border);font-weight:400}
 th:first-child {text-align:left;padding-left:0;white-space:normal;overflow-wrap:anywhere}
 thead th {color:var(--muted);font-size:11px}
 .rate {display:inline-flex;align-items:center;gap:8px}
-.rate i {height:4px;width:36px;border-radius:4px;background:var(--border);overflow:hidden}
+.rate i {height:4px;width:clamp(28px,4vw,64px);border-radius:4px;background:var(--border);overflow:hidden}
 .rate b {display:block;height:100%;background:var(--mint)}
-.rate b.alcohol {background:#9aabff}
+.rate b.alcohol {background:var(--blue)}
 tbody button {display:inline-flex;align-items:center;gap:5px;padding:3px 0;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer;font:inherit}
 tbody button:disabled {opacity:.55;cursor:default}
 .selected button,.result-hint {color:var(--mint)}

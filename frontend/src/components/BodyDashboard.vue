@@ -13,11 +13,11 @@ const rows = computed(() => sortBodyRows(state.collections.body || []))
 const range = ref(90), page = ref(1), otherMetric = ref('bodyFatPct')
 const pageSize = 12
 const metricDefs = [
-  { key: 'weightKg', label: '体重', unit: 'kg', color: '#a5d9b6', icon: Scale },
-  { key: 'bodyFatPct', label: '体脂率', unit: '%', color: '#c1b1db', icon: Activity },
-  { key: 'bmi', label: 'BMI', unit: 'kg/m²', color: '#a4b4e8', icon: Activity },
-  { key: 'heightCm', label: '身高', unit: 'cm', color: '#b1b9c9', icon: Ruler },
-  { key: 'waistCm', label: '腰围', unit: 'cm', color: '#d7bfa6', icon: Ruler },
+  { key: 'weightKg', label: '体重', unit: 'kg', color: '#81d4b2', lightColor: '#27795b', icon: Scale },
+  { key: 'bodyFatPct', label: '体脂率', unit: '%', color: '#baabdb', lightColor: '#7e63a6', icon: Activity },
+  { key: 'bmi', label: 'BMI', unit: 'kg/m²', color: '#a9b8eb', lightColor: '#546ba8', icon: Activity },
+  { key: 'heightCm', label: '身高', unit: 'cm', color: '#b1b9c9', lightColor: '#54697a', icon: Ruler },
+  { key: 'waistCm', label: '腰围', unit: 'cm', color: '#dfba91', lightColor: '#946831', icon: Ruler },
 ]
 const value = (row: Row, key: string) => key === 'bmi' ? calculateBmi(row) : bodyNumber(row[key])
 const cards = computed(() => metricDefs.map(metric => {
@@ -51,13 +51,15 @@ function change(key: string): number | null {
 }
 function chartOption(key: string): EChartsOption {
   const metric = metricDefs.find(item => item.key === key)!
-  const textColor = state.settings.theme === 'light' ? '#616a78' : '#9196a7'
-  const lineColor = state.settings.theme === 'light' ? '#dde1e7' : '#2b2e3a'
+  const light = state.settings.theme === 'light'
+  const textColor = light ? '#53645d' : '#a4b0aa'
+  const lineColor = light ? '#d9ded9' : '#35403d'
+  const seriesColor = light ? metric.lightColor : metric.color
   return {
     animation: !state.settings.reducedMotion,
     grid: { left: 48, right: 18, top: 28, bottom: 43 },
     tooltip: {
-      trigger: 'axis', backgroundColor: state.settings.theme === 'light' ? '#fff' : '#222530', borderColor: lineColor,
+      trigger: 'axis', confine: true, backgroundColor: light ? '#fff' : '#242e2a', borderColor: lineColor,
       textStyle: { color: textColor, fontSize: 11 },
       formatter: (params: any) => {
         const item = Array.isArray(params) ? params[0] : params
@@ -65,30 +67,101 @@ function chartOption(key: string): EChartsOption {
         return row ? `${shortDate(row.measuredAt)} ${sameDayLabels.value[row.id] || ''}<br/>${metric.label}：${formatBodyValue(value(row, key))} ${metric.unit}` : ''
       },
     },
-    xAxis: { type: 'category', data: chartRows.value.map(row => `${String(row.measuredAt).slice(5, 10)}${sameDayLabels.value[row.id] ? ` · ${sameDayLabels.value[row.id].replace('当日第 ', '').replace(' 笔', '')}` : ''}`), boundaryGap: true, axisTick: { show: false }, axisLine: { lineStyle: { color: lineColor } }, axisLabel: { color: textColor, fontSize: 10, hideOverlap: true } },
-    yAxis: { type: 'value', name: metric.unit, scale: true, splitNumber: 4, axisLabel: { color: textColor, fontSize: 10 }, nameTextStyle: { color: textColor, fontSize: 10 }, splitLine: { lineStyle: { color: lineColor, type: 'dashed' } } },
-    series: [{ type: 'line', name: metric.label, data: chartRows.value.map(row => value(row, key)), connectNulls: false, smooth: false, showSymbol: true, symbol: 'circle', symbolSize: 6, lineStyle: { width: 2, color: metric.color }, itemStyle: { color: metric.color }, emphasis: { scale: true } }],
+    xAxis: { type: 'category', data: chartRows.value.map(row => `${String(row.measuredAt).slice(5, 10)}${sameDayLabels.value[row.id] ? ` · ${sameDayLabels.value[row.id].replace('当日第 ', '').replace(' 笔', '')}` : ''}`), boundaryGap: true, axisTick: { show: false }, axisLine: { lineStyle: { color: lineColor } }, axisLabel: { color: textColor, fontSize: 11, hideOverlap: true } },
+    yAxis: { type: 'value', name: metric.unit, scale: true, splitNumber: 4, axisLabel: { color: textColor, fontSize: 11 }, nameTextStyle: { color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: lineColor, type: 'dashed' } } },
+    series: [{ type: 'line', name: metric.label, data: chartRows.value.map(row => value(row, key)), connectNulls: false, smooth: false, showSymbol: true, symbol: 'circle', symbolSize: 6, lineStyle: { width: 2, color: seriesColor }, itemStyle: { color: seriesColor }, emphasis: { scale: true } }],
   }
 }
 </script>
 
 <template>
   <div class="body-dashboard">
-    <section class="body-intro panel"><div><h2>按自己的节奏，记下身体的变化。</h2><p>测量时记一笔，之后补记也可以。每个数字都保留对应的日期。</p></div><Activity :size="28" class="body-intro-icon" /></section>
-    <div class="body-section-title"><h3>最近测量值</h3><span>每项取最近测量日期；同日取最后录入的有效值</span></div>
-    <section class="body-cards sensitive" aria-label="最近身体数据">
-      <article v-for="metric in cards" :key="metric.key" class="panel body-card"><div class="body-card-title"><span>{{ metric.label }}</span><component :is="metric.icon" :size="16" /></div><strong>{{ formatBodyValue(metric.value) }}<small>{{ metric.unit }}</small></strong><span class="body-card-date">{{ metric.date ? shortDate(metric.date) : '尚未记录' }}</span></article>
+    <section v-if="!rows.length" class="panel first-measurement">
+      <Scale :size="24" />
+      <div><h3>还没有身体测量</h3><p>只填这次测到的项目即可。填入身高和体重后，会自动算出 BMI。</p></div>
+      <button class="button primary" @click="emit('edit')"><Plus :size="15" />记第一次测量</button>
     </section>
+    <template v-else>
+    <section class="panel measurement-summary" aria-labelledby="latest-measurements">
+      <header class="body-section-title">
+        <h3 id="latest-measurements">最近测量值</h3>
+        <span>各项取最近一次有数值的测量</span>
+      </header>
+      <div class="body-cards sensitive">
+        <article v-for="metric in cards" :key="metric.key" class="body-card">
+          <div class="body-card-title"><component :is="metric.icon" :size="15" /><span>{{ metric.label }}</span></div>
+          <strong>{{ formatBodyValue(metric.value) }}<small>{{ metric.unit }}</small></strong>
+          <span class="body-card-date">{{ metric.date ? shortDate(metric.date) : '尚未记录' }}</span>
+        </article>
+      </div>
+    </section>
+    <section class="panel trend-board" aria-label="身体变化趋势">
     <div class="body-range-heading"><div><h3>变化趋势</h3><p>按测量日期绘制，缺少的项目留空；同日按录入顺序编号，分别保留。</p></div><label><span class="visually-hidden">身体数据时间范围</span><select v-model.number="range"><option :value="30">最近 30 天</option><option :value="90">最近 90 天</option><option :value="180">最近 180 天</option><option :value="0">全部记录</option></select></label></div>
     <div class="body-chart-grid sensitive">
-      <section class="panel body-chart-panel"><header><div><h3>体重</h3><p v-if="change('weightKg') != null"><component :is="change('weightKg')! < 0 ? ArrowDown : ArrowUp" v-if="change('weightKg') !== 0" :size="12" />较所选范围首笔 {{ change('weightKg')! > 0 ? '+' : '' }}{{ formatBodyValue(change('weightKg')) }} kg</p><p v-else>至少两次有效测量后，可比较变化</p></div><span>{{ points('weightKg').length }} 次测量</span></header><Chart v-if="points('weightKg').length" :option="chartOption('weightKg')" label="体重测量趋势；数值及同日多次记录可在下方测量历史中查看" /><div v-else class="body-chart-empty"><Scale :size="27" /><p>这个时间范围还没有体重数据</p><button class="text-link" @click="emit('edit')">添加一次测量</button></div></section>
-      <section class="panel body-chart-panel"><header><div><label class="body-chart-selector"><span class="visually-hidden">选择身体趋势指标</span><select v-model="otherMetric"><option value="bodyFatPct">体脂率</option><option value="bmi">BMI</option><option value="waistCm">腰围</option></select></label><p v-if="change(otherMetric) != null">较所选范围首笔 {{ change(otherMetric)! > 0 ? '+' : '' }}{{ formatBodyValue(change(otherMetric)) }} {{ otherMetric === 'bodyFatPct' ? '个百分点' : otherDef.unit }}</p><p v-else>{{ otherMetric === 'bmi' ? '同笔记录的身高、体重齐全后自动计算' : '填入测量值后展示趋势' }}</p></div><span>{{ points(otherMetric).length }} 次测量</span></header><Chart v-if="points(otherMetric).length" :option="chartOption(otherMetric)" :label="`${otherDef.label}测量趋势；详细数据可在下方测量历史中查看`" /><div v-else class="body-chart-empty"><Activity :size="27" /><p>{{ otherMetric === 'bmi' ? '还没有同时包含身高、体重的记录' : `这个时间范围还没有${otherDef.label}数据` }}</p><button class="text-link" @click="emit('edit')">添加一次测量</button></div></section>
+      <section class="body-chart-panel"><header><div><h3>体重</h3><p v-if="change('weightKg') != null"><component :is="change('weightKg')! < 0 ? ArrowDown : ArrowUp" v-if="change('weightKg') !== 0" :size="12" />较所选范围首笔 {{ change('weightKg')! > 0 ? '+' : '' }}{{ formatBodyValue(change('weightKg')) }} kg</p><p v-else>至少两次有效测量后，可比较变化</p></div><span>{{ points('weightKg').length }} 次测量</span></header><Chart v-if="points('weightKg').length" :option="chartOption('weightKg')" label="体重测量趋势；数值及同日多次记录可在下方测量历史中查看" /><div v-else class="body-chart-empty"><Scale :size="27" /><p>这个时间范围还没有体重数据</p><button class="text-link" @click="emit('edit')">添加一次测量</button></div></section>
+      <section class="body-chart-panel"><header><div><label class="body-chart-selector"><span class="visually-hidden">选择身体趋势指标</span><select v-model="otherMetric"><option value="bodyFatPct">体脂率</option><option value="bmi">BMI</option><option value="waistCm">腰围</option></select></label><p v-if="change(otherMetric) != null">较所选范围首笔 {{ change(otherMetric)! > 0 ? '+' : '' }}{{ formatBodyValue(change(otherMetric)) }} {{ otherMetric === 'bodyFatPct' ? '个百分点' : otherDef.unit }}</p><p v-else>{{ otherMetric === 'bmi' ? '同笔记录的身高、体重齐全后自动计算' : '填入测量值后展示趋势' }}</p></div><span>{{ points(otherMetric).length }} 次测量</span></header><Chart v-if="points(otherMetric).length" :option="chartOption(otherMetric)" :label="`${otherDef.label}测量趋势；详细数据可在下方测量历史中查看`" /><div v-else class="body-chart-empty"><Activity :size="27" /><p>{{ otherMetric === 'bmi' ? '还没有同时包含身高、体重的记录' : `这个时间范围还没有${otherDef.label}数据` }}</p><button class="text-link" @click="emit('edit')">添加一次测量</button></div></section>
     </div>
+    </section>
     <section class="panel body-history"><header><div><h3>测量历史</h3><p>所选范围内 {{ filtered.length }} 笔 · 可以修正或删除单次测量</p></div><ClipboardList :size="19" /></header><div v-if="visibleRows.length" class="table-scroll sensitive"><table><thead><tr><th>测量日期</th><th>体重 kg</th><th>体脂率 %</th><th>BMI</th><th>身高 cm</th><th>腰围 cm</th><th>备注</th><th>操作</th></tr></thead><tbody><tr v-for="row in visibleRows" :key="row.id"><td>{{ shortDate(row.measuredAt) }}<small v-if="sameDayLabels[row.id]">{{ sameDayLabels[row.id] }}</small></td><td>{{ formatBodyValue(row.weightKg) }}</td><td>{{ formatBodyValue(row.bodyFatPct) }}</td><td>{{ formatBodyValue(calculateBmi(row)) }}</td><td>{{ formatBodyValue(row.heightCm) }}</td><td>{{ formatBodyValue(row.waistCm) }}</td><td class="measurement-note" :title="row.notes || ''">{{ row.notes || '—' }}</td><td><div class="row-actions"><button class="icon-button" :title="`编辑 ${shortDate(row.measuredAt)} ${sameDayLabels[row.id] || ''} 测量`" @click="emit('edit', row)"><Pencil :size="14" /></button><button class="icon-button" :title="`删除 ${shortDate(row.measuredAt)} ${sameDayLabels[row.id] || ''} 测量`" @click="emit('remove', row)"><Trash2 :size="14" /></button></div></td></tr></tbody></table></div><div v-else class="empty-state compact"><p>{{ rows.length ? '这个时间范围还没有测量，可以切换“全部记录”查看。' : '这里会保留你每次填写的身体数据。先记下今天测到的项目就好。' }}</p><button class="button secondary" @click="emit('edit')"><Plus :size="15" />新增测量</button></div><footer v-if="filtered.length"><span>第 {{ page }} / {{ totalPages }} 页</span><div><button class="icon-button" title="上一页测量" :disabled="page <= 1" @click="page--"><ChevronLeft :size="17" /></button><button class="icon-button" title="下一页测量" :disabled="page >= totalPages" @click="page++"><ChevronRight :size="17" /></button></div></footer></section>
+    </template>
     <p class="body-source-note">BMI = 体重（kg）÷ 身高（m）²，使用同一笔测量的数据。它不能直接测量体脂率，也不能单独判断健康状况。<a href="https://www.cdc.gov/bmi/about/" target="_blank" rel="noopener noreferrer">计算说明 · CDC <ChevronRight :size="11" /></a></p>
   </div>
 </template>
 
 <style scoped>
-.body-dashboard{min-width:0}.body-intro{padding:18px 21px;display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:21px;background:linear-gradient(115deg,var(--panel-soft),var(--panel));border-radius:12px}.body-eyebrow{font-size:8px;letter-spacing:2px;color:var(--mint)}.body-intro h2{font-size:18px;font-weight:500;margin:8px 0}.body-intro p{font-size:10px;line-height:1.8;color:var(--muted);margin:0}.body-intro .button{flex-shrink:0;font-size:11px;padding:10px 14px}.body-section-title,.body-range-heading{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:11px}.body-section-title h3,.body-range-heading h3{font-size:13px;font-weight:500;margin:0}.body-section-title>span{color:var(--muted);font-size:9px}.body-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:25px}.body-card{padding:16px;border-radius:11px;min-width:0}.body-card-title{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px}.body-card-title svg{color:var(--subtle)}.body-card>strong{display:block;font-size:27px;font-weight:500;font-variant-numeric:tabular-nums;margin:13px 0 9px;line-height:1.2;white-space:nowrap}.body-card>strong>small{font-size:9px;color:var(--muted);font-weight:400;margin-left:5px}.body-card-date{font-size:9px;color:var(--muted)}.body-range-heading{margin-bottom:13px}.body-range-heading p{font-size:9px;line-height:1.8;color:var(--muted);margin:5px 0 0}.body-range-heading select{font-size:10px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--panel);color:var(--text)}.body-chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-bottom:20px}.body-chart-panel{min-width:0;overflow:hidden;border-radius:12px}.body-chart-panel>header{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:18px 18px 0;min-height:66px}.body-chart-panel h3{font-size:12px;font-weight:500;margin:0}.body-chart-panel header p{font-size:9px;color:var(--muted);margin:8px 0 0;display:flex;align-items:center;gap:4px;line-height:1.6}.body-chart-panel header>span{font-size:9px;color:var(--muted);white-space:nowrap;margin-top:2px}.body-chart-selector select{font-size:12px;font-weight:500;color:var(--text);border:0;background:transparent;margin:-5px 0 -3px -4px;padding:4px;max-width:110px}.body-chart-panel :deep(.chart){height:222px}.body-chart-empty{height:222px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:var(--subtle);padding:25px}.body-chart-empty p{color:var(--muted);font-size:10px;line-height:1.8;margin:0;text-align:center}.body-chart-empty .text-link{font-size:10px}.body-history{border-radius:12px;overflow:hidden}.body-history>header{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;color:var(--muted)}.body-history h3{font-size:13px;font-weight:500;color:var(--text);margin:0}.body-history header p{font-size:9px;margin:7px 0 0;line-height:1.7}.body-history table{font-size:11px}.body-history th,.body-history td{padding:13px 15px;white-space:nowrap;font-variant-numeric:tabular-nums}.body-history th{font-size:9px;color:var(--muted);font-weight:400}.body-history td>small{display:block;font-size:8px;color:var(--muted);margin-top:5px}.body-history .measurement-note{max-width:180px;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:10px}.row-actions{display:flex;gap:5px}.row-actions .icon-button{width:28px;height:28px;min-width:28px}.body-history>footer{display:flex;align-items:center;justify-content:space-between;padding:10px 17px;border-top:1px solid var(--border);color:var(--muted);font-size:10px}.body-history>footer>div{display:flex;gap:7px}.body-history>footer .icon-button{width:29px;height:29px}.body-history .empty-state{padding:30px 22px}.body-history .empty-state p{font-size:11px;line-height:1.9;max-width:450px}.body-source-note{font-size:9px;line-height:1.9;color:var(--muted);margin:15px 1px 0}.body-source-note a{display:inline-flex;align-items:center;gap:3px;margin-left:8px;text-decoration:underline;text-underline-offset:3px}@media(max-width:1100px){.body-cards{gap:9px}.body-card{padding:13px 11px}.body-card>strong{font-size:24px}.body-card>strong>small{font-size:8px}.body-card-title{font-size:10px}.body-card-title svg{width:13px}}@media(max-width:850px){.body-cards{grid-template-columns:repeat(3,minmax(0,1fr))}.body-chart-grid{grid-template-columns:1fr}.body-chart-panel :deep(.chart),.body-chart-empty{height:210px}.body-card{padding:14px}.body-card>strong{font-size:26px}.body-intro{padding:16px}.body-intro h2{font-size:16px}}@media(max-width:580px){.body-intro{align-items:flex-start;gap:12px}.body-intro h2{font-size:14px;line-height:1.7;max-width:200px}.body-intro p{font-size:9px}.body-intro .button{font-size:10px;padding:9px 11px;min-height:36px;margin-top:20px}.body-intro .button svg{width:13px}.body-eyebrow{font-size:7px;letter-spacing:1.4px}.body-section-title{align-items:flex-start;flex-direction:column;gap:6px}.body-cards{gap:8px;margin-bottom:22px}.body-card{padding:13px 10px}.body-card>strong{font-size:23px;display:flex;align-items:baseline;flex-wrap:wrap;gap:3px}.body-card>strong>small{margin:0}.body-card-date{font-size:8px}.body-card-title{font-size:10px}.body-range-heading{gap:10px;align-items:flex-start}.body-range-heading p{font-size:8px;max-width:220px}.body-range-heading select{font-size:9px;padding:8px 7px}.body-history>header{padding:16px}.body-history th,.body-history td{padding:12px}.body-history table{font-size:10px}.body-source-note{font-size:8px}}
+.body-dashboard { display: grid; gap: 16px; min-width: 0; container: measurements / inline-size; }
+.body-section-title, .body-range-heading, .body-history > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px; border-bottom: 1px solid var(--border); }
+.body-dashboard h3 { margin: 0; font-size: 16px; font-weight: 640; }
+.first-measurement { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px; }
+.first-measurement > svg { color: var(--mint); }
+.first-measurement p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.first-measurement button { margin-left: auto; }
+.body-section-title span, .body-range-heading p, .body-history header p, .body-source-note { font-size: 12px; color: var(--muted); line-height: 1.65; }
+.body-cards { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); }
+.body-card { padding: 15px 18px; min-width: 0; }
+.body-card + .body-card { border-left: 1px solid var(--border); }
+.body-card-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 550; }
+.body-card-title svg { color: var(--mint); }
+.body-card > strong { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; font-size: clamp(23px,2.3vw,30px); line-height: 1.3; font-weight: 560; font-variant-numeric: tabular-nums; }
+.body-card small, .body-card-date { font-size: 11px; color: var(--muted); font-weight: 400; }
+.body-range-heading p, .body-history header p { margin: 3px 0 0; }
+.body-range-heading select { width: auto; padding: 6px 9px; font-size: 13px; }
+.body-range-heading label { flex-shrink: 0; }
+.body-chart-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.body-chart-panel { min-width: 0; }
+.body-chart-panel + .body-chart-panel { border-left: 1px solid var(--border); }
+.body-chart-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-height: 60px; padding: 14px 17px 0; }
+.body-chart-panel header p, .body-chart-panel header > span { display: flex; align-items: center; gap: 4px; color: var(--muted); margin: 4px 0 0; font-size: 12px; line-height: 1.6; }
+.body-chart-panel header > span { white-space: nowrap; margin: 0; }
+.body-chart-panel h3, .body-chart-selector select { font-size: 14px; font-weight: 600; }
+.body-chart-selector select { width: auto; margin: -2px 0 0 -2px; padding: 2px; color: var(--text); background: var(--panel); border: 0; }
+.body-chart-panel :deep(.chart) { height: 202px; }
+.body-chart-empty { min-height: 160px; padding: 20px; display: grid; place-content: center; justify-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.body-chart-empty svg { color: var(--subtle); }
+.body-history { overflow: hidden; }
+.body-history .table-scroll { max-width: 100%; }
+.body-history table { width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+.body-history th, .body-history td { padding: 9px 13px; white-space: nowrap; }
+.body-history th { color: var(--muted); font-size: 12px; font-weight: 500; }
+.body-history td > small { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
+.body-history .measurement-note { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.row-actions, .body-history > footer, .body-history > footer > div { display: flex; align-items: center; gap: 4px; }
+.row-actions .icon-button, .body-history > footer .icon-button { width: 30px; height: 30px; min-width: 30px; }
+.body-history > footer { justify-content: space-between; border-top: 1px solid var(--border); padding: 6px 14px; font-size: 12px; color: var(--muted); }
+.body-source-note a { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; color: var(--mint); text-decoration: underline; text-underline-offset: 3px; }
+@container measurements (max-width: 700px) {
+  .body-card { padding: 12px; }
+  .body-chart-grid { grid-template-columns: minmax(0,1fr); }
+  .body-chart-panel + .body-chart-panel { border-left: 0; border-top: 1px solid var(--border); }
+}
+@container measurements (max-width: 490px) {
+  .body-cards { grid-template-columns: repeat(6,minmax(0,1fr)); }
+  .body-card { grid-column: span 2; }
+  .body-card:nth-child(n+4) { grid-column: span 3; border-top: 1px solid var(--border); }
+  .body-card:nth-child(4) { border-left: 0; }
+  .body-section-title, .body-range-heading, .body-history > header { padding: 12px; }
+  .body-section-title { flex-wrap: wrap; gap: 3px 10px; }
+  .body-range-heading { align-items: flex-start; }
+  .body-history th, .body-history td { padding: 8px 10px; }
+}
 </style>

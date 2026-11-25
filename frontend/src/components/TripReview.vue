@@ -76,13 +76,13 @@ onBeforeUnmount(()=>{abort.abort();dialog.value?.close()})
     <p v-if="error" role="alert" class="error-box">{{error}} <button class="text-link" @click="load">重新读取</button></p>
     <p v-if="loading" role="status">读取行程中…</p>
     <template v-else-if="view">
-      <div class="totals sensitive"><div><small>行程实付</small><b>{{ money((totals.SELF+totals.PENDING+totals.REIMBURSED)/100) }}</b></div>
+      <div class="totals sensitive"><div><small>行程消费</small><b>{{ money((totals.SELF+totals.PENDING+totals.REIMBURSED)/100) }}</b></div>
         <div><small>自费</small><b>{{ money(totals.SELF/100) }}</b></div><div><small>待报销</small><b>{{ money(totals.PENDING/100) }}</b></div><div><small>已报销</small><b>{{ money(totals.REIMBURSED/100) }}</b></div></div>
       <h3>选入行程的支出</h3>
-      <p class="quiet">只汇总勾选的实付流水。状态按整笔金额计算。</p>
+      <p class="quiet">只汇总勾选的消费，包括信用支付。报销按整笔消费金额计算。</p>
       <div v-if="view.expenses.length" class="list"><div v-for="e in view.expenses" :key="e.id" class="expense">
         <label><input type="checkbox" :checked="!!claims[e.id]" :disabled="saving || (!!e.tripId && e.tripId!==row.id)" @change="toggle(e)"/>
-          <span class="sensitive"><strong>{{ e.notes||e.category }}</strong><small>{{ e.date }} · {{ e.category }}<template v-if="e.tripId && e.tripId!==row.id"> · 已归入其他行程</template></small></span>
+          <span class="sensitive"><strong>{{ e.notes||e.category }}</strong><small>{{ e.date }} · {{ e.category }}<template v-if="e.debtKind==='CREDIT'"> · {{e.debtPlatform}} 信用支付</template><template v-if="e.tripId && e.tripId!==row.id"> · 已归入其他行程</template></small></span>
         </label><strong class="sensitive">{{ money(e.amount) }}</strong>
         <select v-if="claims[e.id]" v-model="claims[e.id]" :disabled="saving" :aria-label="(e.notes||e.category)+'的报销状态'"><option v-for="(name,code) in labels" :key="code" :value="code">{{name}}</option></select>
       </div></div><p v-else class="quiet">行程期间尚无支出流水。</p>

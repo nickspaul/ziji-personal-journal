@@ -12,7 +12,7 @@ await req('/bootstrap',{status:401});
 const auth=await req('/auth/'+(status.configured?'login':'setup'),{method:'POST',body:{password}});csrf=auth.csrfToken;
 await req('/data/smoking',{method:'POST',body:{},headers:{'X-CSRF-Token':'invalid'},status:403});
 await req('/data/smoking',{method:'POST',body:{},headers:{Origin:'https://example.org'},status:403});
-const bootstrap=await req('/bootstrap');assert.ok(bootstrap.schema.length>=11);assert.ok(bootstrap.health.length>=5);
+const bootstrap=await req('/bootstrap');assert.ok(bootstrap.schema.length>=11);assert.ok(bootstrap.collections.health.length>=5);
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
 const occurredAt=today+'T09:00:00',priceDate='2020-01-01';
 const create=(collection,body)=>req('/data/'+collection,{method:'POST',body:{id:crypto.randomUUID(),...body}});

@@ -61,7 +61,7 @@ async function submit() {
   <div class="overlay" @click.self="!saving && emit('close')">
     <section class="drawer body-editor" role="dialog" aria-modal="true" :aria-label="row ? '编辑身体测量' : '新增身体测量'">
       <header class="drawer-header">
-        <div class="heading-with-icon"><span class="icon-tile mint"><Activity :size="23" /></span><div><small>BODY JOURNAL</small><h2>{{ row ? '编辑' : '新增' }}身体测量</h2></div></div>
+        <div class="heading-with-icon"><span class="icon-tile mint"><Activity :size="23" /></span><div><h2>{{ row ? '编辑' : '新增' }}身体测量</h2></div></div>
         <button class="icon-button" title="关闭身体测量编辑" :disabled="saving" @click="emit('close')"><X :size="20" /></button>
       </header>
       <form class="drawer-form" @submit.prevent="submit">

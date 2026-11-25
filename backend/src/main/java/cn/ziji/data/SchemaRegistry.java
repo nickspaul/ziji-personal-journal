@@ -178,7 +178,10 @@ public class SchemaRegistry {
             field("category","分类","text",true,""),
             field("notes","备注","textarea",false,""),
             field("tripId","关联行程","trip",false,""),
-            field("reimbursement","报销状态","select",false,"SELF:自费|PENDING:待报销|REIMBURSED:已报销")
+            field("reimbursement","报销状态","select",false,"SELF:自费|PENDING:待报销|REIMBURSED:已报销"),
+            field("debtKind","负债类型","select",false,"CREDIT:信用消费|REPAYMENT:还款|OPENING:期初欠款"),
+            field("debtPlatform","负债平台","text",false,""),
+            field("debtFee","还款中的利息与手续费（元）","number",false,"")
         ));
         add("bills","固定账单",List.of(
             field("title","账单名称","text",true,""),

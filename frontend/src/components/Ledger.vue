@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowDownLeft, ArrowUpRight, Banknote, BookOpen, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CopyPlus, House, Layers, ListFilter, Pencil, Plus, ReceiptText, Search, ShoppingBag, Tag, Ticket, TrainFront, Trash2, Utensils, Wallet, X } from 'lucide-vue-next'
-import { api, deleteRow, saveRow } from '../api'
+import { ArrowUpRight, Banknote, BookOpen, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CopyPlus, CreditCard, House, Layers, ListFilter, Pencil, Plus, ReceiptText, Search, ShoppingBag, Tag, Ticket, TrainFront, Trash2, Utensils, Wallet, X } from 'lucide-vue-next'
+import { api, deleteRow } from '../api'
 import { shanghaiDate } from '../types'
-import { adjacentPeriod, anchorInMonth, cashflow, categoryRanking, dayGroups, matchingRows, periodHistory, periodKey, weekColumn } from '../ledgerReview'
-import type { Direction, DirectionFilter, LedgerPeriod, LedgerRow } from '../ledgerReview'
+import type {Row} from '../types'
+import { adjacentPeriod, anchorInMonth, cashflow, categoryRanking, dayGroups, debtDelta, debtLabels, expenseCents, matchingRows, periodHistory, periodKey, weekColumn } from '../ledgerReview'
+import type { DebtKind, Direction, DirectionFilter, LedgerPeriod, LedgerRow } from '../ledgerReview'
 import MonthlyBills from './MonthlyBills.vue'
+import LedgerDebts from './LedgerDebts.vue'
+import LedgerEntry from './LedgerEntry.vue'
 
-const props = defineProps<{ refreshKey?: number }>()
+const props = defineProps<{ refreshKey?: number; editRequest?: {row?:Row;token:number} }>()
 const emit = defineEmits<{ notify: [message: string] }>()
-const suggested: Record<Direction, string[]> = {
-  EXPENSE: ['餐饮', '交通', '购物', '居住', '学习', '休闲', '医疗', '其他'],
-  INCOME: ['工资', '兼职', '奖金', '其他'],
-}
 const icons = { 餐饮: Utensils, 交通: TrainFront, 购物: ShoppingBag, 居住: House, 学习: BookOpen, 休闲: Ticket, 工资: Banknote }
 function categoryIcon(row: LedgerRow) {
+  if(row.debtKind==='REPAYMENT' || row.debtKind==='OPENING')return CreditCard
   if (Object.hasOwn(icons, row.category)) return icons[row.category as keyof typeof icons]
   return row.direction === 'INCOME' ? Wallet : Tag
 }
@@ -23,6 +23,7 @@ const formatCents = (value: number) => currency.format(value / 100)
 const weekday = new Intl.DateTimeFormat('zh-CN', { weekday: 'long', timeZone: 'Asia/Shanghai' })
 const dayLabel = (date: string) => weekday.format(new Date(date + 'T12:00:00+08:00'))
 const period = ref<LedgerPeriod>('month'), anchor = ref(shanghaiDate())
+const mobilePane = ref<'flow' | 'review'>('flow')
 const periodNames = {
   day:   {unit:'日', title:'当日收支', selected:'所选日期', current:'今天', history:'本周每日支出'},
   month: {unit:'月', title:'月度收支', selected:'所选月份', current:'本月', history:'本月每日支出'},
@@ -71,10 +72,14 @@ function pickPeriod(event: Event) {
 }
 function pickBucket(value: string) {
   if (period.value === 'year') selectPeriod('month', anchorInMonth(value, anchor.value))
-  else selectPeriod('day', value)
+  else {
+    selectPeriod('day', value)
+    mobilePane.value = 'flow'
+  }
 }
 const periodRows = computed(() => rows.value.filter(row => periodKey(row.date, period.value) === key.value))
 const totals = computed(() => cashflow(periodRows.value))
+const hasDebtEvents=computed(()=>periodRows.value.some(row=>row.debtKind))
 const history = computed(() => periodHistory(rows.value, anchor.value, period.value))
 const maxExpense = computed(() => Math.max(1, ...history.value.map(item => item.expense)))
 const rankDirection = ref<Direction>('EXPENSE'), rankExpanded = ref(false)
@@ -87,9 +92,11 @@ const query = ref(''), scope = ref('PERIOD'), directionFilter = ref<DirectionFil
 const listTitle = ref<HTMLElement>()
 const page = ref(1), pageSize = 15
 const sourceRows = computed(() => scope.value === 'PERIOD' ? periodRows.value : rows.value)
-const filtered = computed(() => matchingRows(sourceRows.value, query.value, directionFilter.value, categoryFilter.value))
+const platformFilter = ref('')
+const filtered = computed(() => matchingRows(sourceRows.value, query.value, directionFilter.value, categoryFilter.value)
+  .filter(row=>!platformFilter.value || row.debtPlatform===platformFilter.value))
 const groups = computed(() => dayGroups(filtered.value))
-const filterActive = computed(() => !!(query.value.trim() || directionFilter.value !== 'ALL' || categoryFilter.value))
+const filterActive = computed(() => !!(query.value.trim() || directionFilter.value !== 'ALL' || categoryFilter.value || platformFilter.value))
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize)))
 const visibleDays = computed(() => {
   const start = (page.value - 1) * pageSize, end = start + pageSize
@@ -100,75 +107,52 @@ const visibleDays = computed(() => {
     return entries.length ? [{ ...group, entries }] : []
   })
 })
-watch([key, query, scope, directionFilter, categoryFilter], () => { page.value = 1 })
+watch([key, query, scope, directionFilter, categoryFilter,platformFilter], () => { page.value = 1 })
 watch([key, rankDirection], () => { rankExpanded.value = false })
 watch(pages, count => { page.value = Math.min(page.value, count) })
 function clearFilters() {
   query.value = ''
   directionFilter.value = 'ALL'
   categoryFilter.value = ''
+  platformFilter.value = ''
 }
 function drillDown(category: string) {
+  mobilePane.value = 'flow'
   query.value = ''
   scope.value = 'PERIOD'
   directionFilter.value = rankDirection.value
   categoryFilter.value = category
+  platformFilter.value = ''
   nextTick(() => listTitle.value?.focus())
 }
 
-const emptyForm = () => ({ date: isCurrent.value ? shanghaiDate() : anchor.value, direction: 'EXPENSE' as Direction, amount: '', category: '餐饮', notes: '' })
-const form = ref(emptyForm()), editing = ref<LedgerRow>(), entryId = ref(crypto.randomUUID())
-const dialog = ref<HTMLDialogElement>(), amountInput = ref<HTMLInputElement>()
-const busy = ref(false), formError = ref(''), actionError = ref(''), removing = ref('')
-const categories = computed(() => {
-  const recent = rows.value.filter(row => row.direction === form.value.direction)
-    .sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(row => row.category)
-  return [...new Set([...recent, ...suggested[form.value.direction]])]
-})
-function setDirection(direction: Direction) {
-  if (form.value.direction !== direction) {
-    form.value.direction = direction
-    form.value.category = categories.value[0] || suggested[direction][0]
-  }
+const busy = ref(false),actionError=ref(''),removing=ref('')
+const entry=ref<{date:string;kind:Direction|DebtKind;row?:LedgerRow;repeat?:boolean;platform?:string;key:string}>()
+function openEditor(row?:LedgerRow,repeat=false,kind:Direction|DebtKind='EXPENSE',platform?:string,date=isCurrent.value?shanghaiDate():anchor.value) {
+  if(busy.value)return
+  removing.value=''
+  entry.value={row,repeat,kind:row?.debtKind || row?.direction || kind,date,platform,key:crypto.randomUUID()}
 }
-function openEditor(row?: LedgerRow, repeat = false, direction: Direction = 'EXPENSE') {
-  if (busy.value) return
-  editing.value = repeat ? undefined : row
-  form.value = row
-    ? { date: repeat ? shanghaiDate() : row.date, direction: row.direction, amount: String(row.amount), category: row.category, notes: row.notes || '' }
-    : { ...emptyForm(), direction }
-  if (!row) form.value.category = categories.value[0] || suggested[direction][0]
-  formError.value = ''
-  removing.value = ''
-  entryId.value = crypto.randomUUID()
-  dialog.value?.showModal()
-  nextTick(() => { amountInput.value?.focus(); amountInput.value?.select() })
+watch(()=>props.editRequest,request=>{if(request)openEditor(request.row as LedgerRow|undefined)}, {immediate:true})
+function openDebt(kind:DebtKind,platform?:string,row?:LedgerRow) {
+  const firstDate=kind==='OPENING' && platform
+    ? rows.value.filter(r=>r.debtPlatform===platform).map(r=>r.date).sort()[0] : undefined
+  openEditor(row,false,kind,platform,firstDate || shanghaiDate())
 }
-function closeEditor() { if (!busy.value) dialog.value?.close() }
-async function save() {
-  if (busy.value || loading.value || loadError.value) return
-  formError.value = ''
-  const fields = form.value
-  const amount = Number(fields.amount)
-  if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(fields.amount.trim()) || amount < .01 || amount > 999999999) {
-    formError.value = '金额须在 0.01 到 999,999,999 元之间，最多两位小数。'
-    return
-  }
-  if (!fields.category.trim()) { formError.value = '请填写类别，例如餐饮或交通。'; return }
-  busy.value = true
-  try {
-    const saved = await saveRow('ledger', {
-      ...fields, id: editing.value?.id || entryId.value, amount, category: fields.category.trim(), notes: fields.notes.trim(),
-      ...(editing.value?.tripId && fields.direction==='INCOME' ? {tripId:null,reimbursement:null} : {}),
-    }, editing.value) as LedgerRow
-    rows.value = [saved, ...rows.value.filter(row => row.id !== saved.id)]
-    if (loading.value) void load()
-    anchor.value = saved.date
-    if (!editing.value) { clearFilters(); scope.value = 'PERIOD'; page.value = 1 }
-    emit('notify', editing.value ? '已更新账目。' : '已记入账本。')
-    dialog.value?.close()
-  } catch (error) { formError.value = (error as Error).message }
-  finally { busy.value = false }
+function showPlatform(platform?:string) {
+  mobilePane.value = 'flow'
+  clearFilters()
+  scope.value='ALL'
+  if(platform){directionFilter.value='DEBT';platformFilter.value=platform}
+  nextTick(()=>listTitle.value?.focus())
+}
+function afterSave(saved:LedgerRow,wasEdit:boolean) {
+  mobilePane.value = 'flow'
+  rows.value=[saved,...rows.value.filter(row=>row.id!==saved.id)]
+  anchor.value=saved.date
+  if(!wasEdit){clearFilters();scope.value='PERIOD';page.value=1}
+  entry.value=undefined
+  emit('notify',wasEdit?'已更新原账目。':'已记入账本。')
 }
 async function remove(row: LedgerRow) {
   if (busy.value) return
@@ -202,20 +186,67 @@ async function remove(row: LedgerRow) {
           <button v-if="!isCurrent" class="text-link back-month" @click="selectPeriod(period,shanghaiDate())">{{ caption.current }}</button>
         </div>
       </div>
-      <button class="button primary compact-button" :disabled="!!loadError || loading" @click="openEditor()"><Plus :size="17"/>记一笔</button>
+      <div class="ledger-actions"><LedgerDebts :rows="rows" :ready="!loading && !loadError" @entry="openDebt" @history="showPlatform"/>
+        <button class="button primary compact-button" :disabled="!!loadError || loading" @click="openEditor()"><Plus :size="17"/>记一笔</button></div>
     </header>
     <div v-if="loadError" class="error-box" role="alert">{{ loadError }} <button class="text-link" @click="load">重新读取</button></div>
     <div v-if="loading || loadError" class="panel ledger-empty" role="status">{{ loading ? '正在读取账本…' : '账本暂不可用' }}</div>
     <template v-else>
-      <div class="ledger-review">
-        <section class="panel cash-card" :aria-label="caption.title">
-          <header><h2><Wallet :size="17"/>{{ caption.title }}</h2><span class="quiet sensitive">{{ periodRows.length }} 笔</span></header>
+      <section class="panel cash-card" :aria-label="caption.title">
+          <header><span class="summary-icon"><Wallet :size="20"/></span><div><h2>{{ caption.title }}</h2><small class="quiet sensitive">{{ periodRows.length }} 笔流水</small></div></header>
           <dl class="cash-numbers sensitive">
             <div class="cash-main"><dt>支出</dt><dd>{{ formatCents(totals.expense) }}</dd></div>
             <div><dt>收入</dt><dd>{{ formatCents(totals.income) }}</dd></div>
-            <div><dt>结余</dt><dd>{{ formatCents(totals.net) }}</dd></div>
+            <div><dt title="收入减去消费和息费">收支结余</dt><dd>{{ formatCents(totals.net) }}</dd></div>
           </dl>
-          <div class="history-heading"><h3>{{ caption.history }}</h3><span class="quiet">{{ period==='year'?'点月份查看每日明细':'点日期查看当日流水' }}</span></div>
+          <p v-if="hasDebtEvents" class="cash-out sensitive">现金流出 {{formatCents(totals.cashOut)}} · 其中归还本金 {{formatCents(totals.paidPrincipal)}}</p>
+      </section>
+      <div class="ledger-view-switch direction-tabs" role="group" aria-label="账本视图">
+        <button :aria-pressed="mobilePane==='flow'" @click="mobilePane='flow'">收支明细</button>
+        <button :aria-pressed="mobilePane==='review'" @click="mobilePane='review'">统计与账单</button>
+      </div>
+      <div class="ledger-workspace" :data-view="mobilePane">
+      <section class="panel flow-panel" aria-label="收支明细">
+        <header><h2 ref="listTitle" tabindex="-1">收支明细</h2><span class="quiet sensitive">{{ filtered.length }} 笔</span></header>
+        <div class="filters">
+          <label class="ledger-search"><Search :size="15"/><input v-model="query" type="search" aria-label="搜索账目" placeholder="搜索平台、类别、日期、备注或金额"/></label>
+          <select v-model="scope" aria-label="搜索日期范围"><option value="PERIOD">{{ caption.selected }}</option><option value="ALL">全部日期</option></select>
+          <select v-model="directionFilter" aria-label="筛选收支类型" @change="categoryFilter='';platformFilter=''"><option value="ALL">全部流水</option><option value="EXPENSE">只看支出</option><option value="INCOME">只看收入</option><option value="DEBT">平台负债流水</option></select>
+        </div>
+        <div v-if="categoryFilter" class="category-filter sensitive"><ListFilter :size="14"/>类别<button @click="categoryFilter=''">{{ categoryFilter }} <X :size="13"/></button></div>
+        <div v-if="platformFilter" class="category-filter sensitive"><ListFilter :size="14"/>平台<button @click="platformFilter=''">{{platformFilter}} <X :size="13"/></button></div>
+        <p v-if="actionError" class="error-box" role="alert">{{ actionError }}</p>
+        <div v-if="visibleDays.length" class="days sensitive">
+          <section v-for="day in visibleDays" :key="day.date" class="day">
+            <header><h3><time :datetime="day.date">{{ day.date }}</time><small>{{ dayLabel(day.date) }}</small></h3>
+              <span><template v-if="filterActive">筛选小计 · </template><template v-if="day.income">收 {{ formatCents(day.income) }}</template>{{ day.income&&day.expense?' · ':'' }}<template v-if="day.expense">支 {{ formatCents(day.expense) }}</template><template v-if="day.paidPrincipal">{{day.income||day.expense?' · ':''}}还本金 {{formatCents(day.paidPrincipal)}}</template></span>
+            </header>
+            <ul class="lines">
+              <li v-for="row in day.entries" :key="row.id">
+                <span class="category-icon" :class="{income:row.direction==='INCOME'}"><component :is="categoryIcon(row)" :size="16"/></span>
+                <div class="line-description"><strong>{{row.debtKind && row.debtKind!=='CREDIT'?debtLabels[row.debtKind]:row.category}}</strong>
+                  <span v-if="row.debtKind">{{row.debtPlatform}} · {{row.debtKind==='CREDIT'?'信用支付':row.debtKind==='OPENING'?'结转本金':'本金 '+formatCents(-debtDelta(row))+' · 息费 '+formatCents(expenseCents(row))}}</span>
+                  <span v-if="row.notes" :title="row.notes">{{row.notes}}</span></div>
+                <div class="line-amount" :class="{income:row.direction==='INCOME'}"><strong>{{row.debtKind==='OPENING'?'':row.direction==='INCOME'?'+':'−'}}{{currency.format(row.amount)}}</strong><small v-if="row.debtKind==='REPAYMENT'">计支出 {{formatCents(expenseCents(row))}}</small><small v-else-if="row.debtKind==='OPENING'">计支出 ¥0.00</small></div>
+                <div v-if="removing===row.id" class="row-controls"><button class="row-confirm" :disabled="busy" @click="remove(row)">确认移除</button><button class="text-link" :disabled="busy" @click="removing=''">取消</button></div>
+                <div v-else class="row-controls">
+                  <button v-if="row.debtKind!=='OPENING'" class="icon-button" :disabled="busy" :aria-label="'再记一笔 '+row.category" title="按这条再记一笔" @click="openEditor(row,true)"><CopyPlus :size="15"/></button>
+                  <button class="icon-button" :disabled="busy" :aria-label="'编辑 '+row.date+' '+row.category" title="编辑账目" @click="openEditor(row)"><Pencil :size="14"/></button>
+                  <button class="icon-button" :disabled="busy" :aria-label="'移除 '+row.date+' '+row.category" title="移入回收站" @click="removing=row.id;actionError=''"><Trash2 :size="14"/></button>
+                </div>
+              </li>
+            </ul>
+          </section>
+        </div>
+        <div v-else class="ledger-empty"><ReceiptText :size="23"/><strong>{{ filterActive?'没有符合条件的账目':'还没有收支明细' }}</strong>
+          <button class="text-link" @click="filterActive?clearFilters():openEditor()">{{ filterActive?'清除筛选':'记下第一笔' }}</button>
+        </div>
+        <footer v-if="pages>1"><button class="icon-button" title="上一页账目" :disabled="page===1" @click="page--"><ChevronLeft :size="16"/></button><span>第 {{ page }} / {{ pages }} 页</span><button class="icon-button" title="下一页账目" :disabled="page>=pages" @click="page++"><ChevronRight :size="16"/></button></footer>
+        <p class="flow-note"><CircleHelp :size="13"/>支出按消费发生日和还款息费统计。归还本金单列。烟酒用量估价见日常概览。</p>
+      </section>
+      <aside class="ledger-review" aria-label="支出统计与固定账单">
+        <section class="panel history-card">
+          <div class="history-heading"><h2><CalendarDays :size="16"/>{{ caption.history }}</h2><span class="quiet">{{ period==='year'?'选月份查看':'选日期查看' }}</span></div>
           <div v-if="period==='month'" class="expense-calendar sensitive">
             <span v-for="w in ['一','二','三','四','五','六','日']" :key="w" class="weekday">周{{ w }}</span>
             <button v-for="(item,i) in history" :key="item.key" :class="{recorded:item.count}" :style="i===0?{gridColumnStart:weekColumn(item.key)}:undefined"
@@ -249,67 +280,13 @@ async function remove(row: LedgerRow) {
           <div v-else class="rank-empty"><ReceiptText :size="22"/><p>{{ caption.selected }}没有{{ directionName(rankDirection) }}记录</p><button class="text-link" @click="openEditor(undefined,false,rankDirection)">记一笔{{ directionName(rankDirection) }} <ArrowUpRight :size="13"/></button></div>
           <button v-if="ranking.length>4" class="text-link rank-more" @click="rankExpanded=!rankExpanded">{{ rankExpanded?'收起':'查看全部 '+ranking.length+' 类' }}</button>
         </section>
-      </div>
-
       <MonthlyBills :rows="rows" :refresh-key="refreshKey" @changed="load" @notify="emit('notify',$event)"/>
-      <section class="panel flow-panel" aria-label="收支明细">
-        <header><h2 ref="listTitle" tabindex="-1">收支明细</h2><span class="quiet sensitive">{{ filtered.length }} 笔</span></header>
-        <div class="filters">
-          <label class="ledger-search"><Search :size="15"/><input v-model="query" type="search" aria-label="搜索账目" placeholder="搜索类别、日期、备注或金额"/></label>
-          <select v-model="scope" aria-label="搜索日期范围"><option value="PERIOD">{{ caption.selected }}</option><option value="ALL">全部日期</option></select>
-          <select v-model="directionFilter" aria-label="筛选收支类型" @change="categoryFilter=''"><option value="ALL">全部收支</option><option value="EXPENSE">只看支出</option><option value="INCOME">只看收入</option></select>
-        </div>
-        <div v-if="categoryFilter" class="category-filter sensitive"><ListFilter :size="14"/>类别<button @click="categoryFilter=''">{{ categoryFilter }} <X :size="13"/></button></div>
-        <p v-if="actionError" class="error-box" role="alert">{{ actionError }}</p>
-        <div v-if="visibleDays.length" class="days sensitive">
-          <section v-for="day in visibleDays" :key="day.date" class="day">
-            <header><h3><time :datetime="day.date">{{ day.date }}</time><small>{{ dayLabel(day.date) }}</small></h3>
-              <span><template v-if="filterActive">筛选小计 · </template><template v-if="day.income">收 {{ formatCents(day.income) }}</template>{{ day.income&&day.expense?' · ':'' }}<template v-if="day.expense">支 {{ formatCents(day.expense) }}</template></span>
-            </header>
-            <ul class="lines">
-              <li v-for="row in day.entries" :key="row.id">
-                <span class="category-icon" :class="{income:row.direction==='INCOME'}"><component :is="categoryIcon(row)" :size="16"/></span>
-                <div class="line-description"><strong>{{ row.category }}</strong><span v-if="row.notes" :title="row.notes">{{ row.notes }}</span></div>
-                <div class="line-amount" :class="{income:row.direction==='INCOME'}"><strong>{{ row.direction==='INCOME'?'+':'−' }}{{ currency.format(row.amount) }}</strong></div>
-                <div v-if="removing===row.id" class="row-controls"><button class="row-confirm" :disabled="busy" @click="remove(row)">确认移除</button><button class="text-link" :disabled="busy" @click="removing=''">取消</button></div>
-                <div v-else class="row-controls">
-                  <button class="icon-button" :disabled="busy" :aria-label="'再记一笔 '+row.category" title="按这条再记一笔" @click="openEditor(row,true)"><CopyPlus :size="15"/></button>
-                  <button class="icon-button" :disabled="busy" :aria-label="'编辑 '+row.date+' '+row.category" title="编辑账目" @click="openEditor(row)"><Pencil :size="14"/></button>
-                  <button class="icon-button" :disabled="busy" :aria-label="'移除 '+row.date+' '+row.category" title="移入回收站" @click="removing=row.id;actionError=''"><Trash2 :size="14"/></button>
-                </div>
-              </li>
-            </ul>
-          </section>
-        </div>
-        <div v-else class="ledger-empty"><ReceiptText :size="23"/><strong>{{ filterActive?'没有符合条件的账目':'还没有收支明细' }}</strong>
-          <button class="text-link" @click="filterActive?clearFilters():openEditor()">{{ filterActive?'清除筛选':'记下第一笔' }}</button>
-        </div>
-        <footer v-if="pages>1"><button class="icon-button" title="上一页账目" :disabled="page===1" @click="page--"><ChevronLeft :size="16"/></button><span>第 {{ page }} / {{ pages }} 页</span><button class="icon-button" title="下一页账目" :disabled="page>=pages" @click="page++"><ChevronRight :size="16"/></button></footer>
-        <p class="flow-note"><CircleHelp :size="13"/>账本汇总实际收付。烟酒按用量估算的费用可在日常概览查看。</p>
-      </section>
+      </aside>
+      </div>
     </template>
 
-    <dialog ref="dialog" class="entry-dialog" aria-labelledby="ledger-entry-title" @cancel.prevent="closeEditor" @click.self="closeEditor">
-      <form @submit.prevent="save">
-        <header><h2 id="ledger-entry-title">{{ editing?'编辑账目':'记一笔' }}</h2><button type="button" class="icon-button" title="关闭" :disabled="busy" @click="closeEditor"><X :size="18"/></button></header>
-        <fieldset :disabled="busy" class="entry-body sensitive">
-          <div class="entry-direction" role="group" aria-label="收支类型"><button type="button" :aria-pressed="form.direction==='EXPENSE'" @click="setDirection('EXPENSE')"><ArrowUpRight :size="17"/>支出</button><button type="button" :aria-pressed="form.direction==='INCOME'" @click="setDirection('INCOME')"><ArrowDownLeft :size="17"/>收入</button></div>
-          <label class="amount-field"><span>金额（元）</span><div><b>¥</b><input ref="amountInput" v-model="form.amount" type="text" inputmode="decimal" placeholder="0.00" maxlength="16" required/></div></label>
-          <div class="entry-grid">
-            <label>类别<input v-model="form.category" maxlength="40" placeholder="点选下方类别或自行输入" required/></label>
-            <label>日期<input v-model="form.date" type="date" min="1000-01-01" max="9999-12-31" required/></label>
-          </div>
-          <div class="category-picks" role="group" :aria-label="directionName(form.direction)+'类别'">
-            <button v-for="category in categories" :key="category" type="button"
-              :aria-pressed="form.category===category" @click="form.category=category">{{ category }}</button>
-          </div>
-          <label class="entry-note">备注 <textarea v-model="form.notes" rows="2" maxlength="10000" placeholder="选填，例如和同事吃午饭"/></label>
-        </fieldset>
-        <p v-if="formError" class="error-box" role="alert">{{ formError }}</p>
-        <p v-if="editing?.tripId && form.direction==='INCOME'" class="hint">保存为收入后，这笔流水会从原行程的支出中移除。</p>
-        <footer><button type="button" class="button secondary" :disabled="busy" @click="closeEditor">取消</button><button class="button primary" :disabled="busy || loading || !!loadError">{{ busy?'保存中…':editing?'保存修改':'保存账目' }}</button></footer>
-      </form>
-    </dialog>
+    <LedgerEntry v-if="entry" :key="entry.key" v-bind="{date:entry.date,row:entry.row,repeat:entry.repeat,kind:entry.kind,platform:entry.platform}"
+      :rows="rows" :ready="!loadError && !loading" @close="entry=undefined" @saved="afterSave"/>
   </div>
 </template>
 

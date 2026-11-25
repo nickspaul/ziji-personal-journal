@@ -1,11 +1,37 @@
 import type { Row } from './types'
 
 export type Direction = 'EXPENSE' | 'INCOME'
-export type LedgerRow = Row & { date: string; direction: Direction; amount: number; category: string; notes?: string }
-export type DirectionFilter = Direction | 'ALL'
+export type DebtKind = 'CREDIT' | 'REPAYMENT' | 'OPENING'
+export type LedgerRow = Row & { date: string; direction: Direction; amount: number; category: string; notes?: string;
+  debtKind?: DebtKind | null; debtPlatform?: string | null; debtFee?: number | null }
+export type DirectionFilter = Direction | 'ALL' | 'DEBT'
+export const debtLabels: Record<DebtKind, string> = { CREDIT:'信用消费', REPAYMENT:'还款', OPENING:'期初欠款' }
+export const platformPresets = ['美团', '支付宝', '抖音', '京东']
 
-function cents(row: LedgerRow) {
-  return Math.round(Number(row.amount) * 100)
+export function cents(amount: number | string | null | undefined) {
+  return Math.round(Number(amount || 0) * 100)
+}
+
+export function expenseCents(row: LedgerRow) {
+  if (row.direction === 'INCOME' || row.debtKind === 'OPENING') return 0
+  return cents(row.debtKind === 'REPAYMENT' ? row.debtFee : row.amount)
+}
+
+export function debtDelta(row: LedgerRow) {
+  if (row.debtKind === 'REPAYMENT') return cents(row.debtFee) - cents(row.amount)
+  return row.debtKind === 'CREDIT' || row.debtKind === 'OPENING' ? cents(row.amount) : 0
+}
+
+export function debtAccounts(rows: LedgerRow[], through: string) {
+  const accounts = new Map<string, {platform: string; balance: number; opening?: LedgerRow}>()
+  for (const row of rows) {
+    if (row.deleted || !row.debtKind || !row.debtPlatform || row.date > through) continue
+    const account = accounts.get(row.debtPlatform) ?? {platform: row.debtPlatform, balance: 0, opening: undefined}
+    account.balance += debtDelta(row)
+    if (row.debtKind === 'OPENING') account.opening = row
+    accounts.set(row.debtPlatform, account)
+  }
+  return [...accounts.values()].sort((a,b) => b.balance-a.balance || a.platform.localeCompare(b.platform,'zh-CN'))
 }
 
 export type LedgerPeriod = 'day' | 'month' | 'year'
@@ -61,24 +87,30 @@ export function periodHistory(rows: LedgerRow[], date: string, period: LedgerPer
     const item = byKey.get(period === 'year' ? row.date.slice(0, 7) : row.date)
     if (!item) continue
     item.count++
-    if (row.direction === 'EXPENSE') item.expense += cents(row)
+    item.expense += expenseCents(row)
   }
   return buckets
 }
 
 export function cashflow(rows: LedgerRow[]) {
-  let income = 0, expense = 0
+  let income = 0, expense = 0, paidPrincipal = 0, cashOut = 0
   for (const row of rows) {
-    if (row.direction === 'INCOME') income += cents(row)
-    else expense += cents(row)
+    if (row.direction === 'INCOME') income += cents(row.amount)
+    else {
+      expense += expenseCents(row)
+      if (row.debtKind !== 'CREDIT' && row.debtKind !== 'OPENING') cashOut += cents(row.amount)
+      if (row.debtKind === 'REPAYMENT') paidPrincipal -= debtDelta(row)
+    }
   }
-  return { income, expense, net: income - expense }
+  return { income, expense, net: income - expense, paidPrincipal, cashOut }
 }
 
 export function categoryRanking(rows: LedgerRow[], direction: Direction) {
   const grouped = new Map<string, number>()
   for (const row of rows) {
-    if (row.direction === direction) grouped.set(row.category, (grouped.get(row.category) || 0) + cents(row))
+    if (row.direction !== direction) continue
+    const amount = direction === 'EXPENSE' ? expenseCents(row) : cents(row.amount)
+    if (amount) grouped.set(row.category, (grouped.get(row.category) || 0) + amount)
   }
   return [...grouped].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
 }
@@ -86,9 +118,11 @@ export function categoryRanking(rows: LedgerRow[], direction: Direction) {
 export function matchingRows(rows: LedgerRow[], query: string, direction: DirectionFilter, category: string) {
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
   return rows.filter(row => {
-    if (direction !== 'ALL' && row.direction !== direction) return false
+    if (direction === 'DEBT' && !row.debtKind) return false
+    if (direction === 'INCOME' && row.direction !== 'INCOME') return false
+    if (direction === 'EXPENSE' && !expenseCents(row)) return false
     if (category && row.category !== category) return false
-    const text = [row.category, row.notes, row.date, Number(row.amount).toFixed(2)].join(' ').toLocaleLowerCase()
+    const text = [row.category, row.notes, row.date, row.debtPlatform, row.debtKind && debtLabels[row.debtKind], Number(row.amount).toFixed(2)].join(' ').toLocaleLowerCase()
     return words.every(word => text.includes(word))
   }).sort((a, b) => b.date.localeCompare(a.date) || String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id))
 }

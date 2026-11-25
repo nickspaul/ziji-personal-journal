@@ -60,6 +60,8 @@ function readDate(text: string, today: string, fallback: string) {
 }
 
 function payment(text: string) {
+  if (/还款|偿还|归还(?:本金|欠款)|还(?:了|清)?(?:花呗|白条|月付|贷款|房贷|欠款|信用卡|借款)/.test(text))
+    return {amount:'', paymentHint:'这句话提到还款。请在日常记账里选「还款」，拆分本金和息费。'}
   // Only an explicit first-person payment is sufficient to prefill the ledger.
   // Requiring a boundary after the amount also excludes foreign currencies.
   const personal = /(?:我(?:自己|本人)?\s*(?:实际支付|实付|支付|付款|付|花|出)|本人\s*(?:实付|支付|付))\s*了?\s*([¥￥]?)\s*(\d+(?:[,，]\d+)*(?:\.\d+)?)\s*(元(?:人民币)?|块(?:钱)?|人民币)?(?=\s*(?:$|[。；;！!]|[,，](?!\s*\d)))/g

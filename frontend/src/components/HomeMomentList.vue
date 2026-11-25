@@ -57,6 +57,8 @@ function linkLabel({ row, kind }: HomeMoment) {
 .timeline-row { padding: 8px 0; border-color: var(--border); }
 .timeline-row:hover strong { text-decoration: underline; text-underline-offset: 3px; }
 .timeline-content { flex: 1; }
-.timeline-content strong { max-width: 100%; color: var(--text); font-size: 12px; }
-.timeline-content span { color: var(--muted); font-size: 10px; margin-top: 3px; }
+.timeline-content strong { max-width: 100%; color: var(--text); font-size: 13px; }
+.timeline-content span { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.timeline-row .timeline-symbol { width: 29px; height: 29px; border-radius: 7px; }
+.timeline-row .timeline-cost { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 </style>

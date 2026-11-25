@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed,reactive,ref} from 'vue'
+import {computed,reactive,ref,onMounted} from 'vue'
 import {X,Check,LoaderCircle,ChevronDown,Cigarette,Wine} from 'lucide-vue-next'
 import {state,saveRow} from '../api'
 import {productPrice} from '../productPricing'
@@ -11,6 +11,8 @@ const form=reactive<Record<string,any>>({kind:props.kind||props.preset?.kind||'S
 if(props.row&&form.packagePrice==null){form.packagePrice=priorPrice.amount??'';form.priceType=priorPrice.type}
 if(form.packagePrice==null)form.packagePrice=''
 const isSmoke=computed(()=>form.kind==='SMOKING'),details=ref(false),freeConfirmed=ref(props.row?.packagePrice===0),saving=ref(false),error=ref(''),createId=crypto.randomUUID()
+const priceInput=ref<HTMLInputElement|null>(null)
+onMounted(()=>{if(props.preset?.focusPrice)priceInput.value?.focus()})
 const confirmPrice=ref(props.row?priorPrice.confirmed:true)
 const priceRequired=computed(()=>!props.row||confirmPrice.value)
 const specificationRequired=computed(()=>!props.row||(confirmPrice.value&&(!priorPrice.confirmed||Number(form.packagePrice)!==priorPrice.amount)))
@@ -32,7 +34,7 @@ async function submit(){
 </script>
 <template>
 <div class="overlay product-editor-overlay" @click.self="emit('close')"><section class="drawer" role="dialog" aria-modal="true" :aria-label="row?'编辑种类与单价':'新增种类与单价'">
- <header class="drawer-header"><div class="heading-with-icon"><span class="icon-tile" :class="isSmoke?'smoking':'alcohol'"><Cigarette v-if="isSmoke" :size="23"/><Wine v-else :size="23"/></span><div><small>PRODUCT & UNIT PRICE</small><h2>{{row?'编辑':'新增'}}种类与单价</h2></div></div><button class="icon-button" title="关闭种类编辑" @click="emit('close')"><X :size="20"/></button></header>
+ <header class="drawer-header"><div class="heading-with-icon"><span class="icon-tile" :class="isSmoke?'smoking':'alcohol'"><Cigarette v-if="isSmoke" :size="23"/><Wine v-else :size="23"/></span><div><h2>{{row?'编辑':'新增'}}种类与单价</h2></div></div><button class="icon-button" title="关闭种类编辑" @click="emit('close')"><X :size="20"/></button></header>
  <form class="drawer-form" @submit.prevent="submit"><div class="drawer-body">
  <p class="hint">设置一次单价，之后按抽的根数或本人喝的量自动算费。无需填写每次购买流水。</p>
  <div class="fields-grid">
@@ -40,7 +42,7 @@ async function submit(){
  <label class="field"><span>品牌 *</span><input v-model.trim="form.brand" required maxlength="500" placeholder="如：利群、青岛"/></label>
  <label class="field full"><span>种类名称 *</span><input v-model.trim="form.name" required maxlength="500" placeholder="填写容易认出的具体名称"/></label>
  <label class="field full"><span>规格 / 型号</span><input v-model.trim="form.variant" maxlength="500" placeholder="同品牌不同规格分别保存"/></label>
- <label class="field"><span>{{priceLabel}} {{priceRequired?'*':''}}</span><input v-model.number="form.packagePrice" @input="confirmPrice=form.packagePrice!==''&&form.packagePrice!=null" type="number" min="0" step="0.000001" :required="priceRequired" placeholder="填写你采用的单价"/></label>
+ <label class="field"><span>{{priceLabel}} {{priceRequired?'*':''}}</span><input ref="priceInput" v-model.number="form.packagePrice" @input="confirmPrice=form.packagePrice!==''&&form.packagePrice!=null" type="number" min="0" step="0.000001" :required="priceRequired" placeholder="填写你采用的单价"/></label>
  <label v-if="isSmoke" class="field"><span>每包根数 {{specificationRequired?'*':''}}</span><input v-model.number="form.unitCount" type="number" min="1" max="1000" step="1" :required="specificationRequired"/></label>
  <template v-else><label class="field"><span>每瓶容量 · ml {{specificationRequired?'*':''}}</span><input v-model.number="form.bottleMl" type="number" min="0.01" step="any" :required="specificationRequired"/></label><label class="field"><span>酒精度 · % vol {{!row?'*':''}}</span><input v-model.number="form.abv" type="number" min="0" max="100" step="any" :required="!row" placeholder="如：4.5 或 42；旧资料未知可留空"/></label></template>
  <label class="field"><span>单价来源</span><select v-model="form.priceType"><option value="PERSONAL">个人设定单价</option><option value="ACTUAL">实际单价</option><option value="REFERENCE">参考单价（费用标为估算）</option></select></label>

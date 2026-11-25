@@ -64,6 +64,21 @@ class JournalBackupServiceTest {
         assertEquals(1,service.restore(backup,"merge").get("imported"));assertEquals(1,store.get("body").size());
         assertTrue(store.get("journal").isEmpty());assertTrue(store.get("tasks").isEmpty());
     }
+    @Test void debtBackupValidatesMergedBalancesIncludingExistingRowsAndSoftDeletion(){
+        var old=row();old.putAll(Map.of("date","2025-10-20","direction","EXPENSE","category","餐饮","amount",20));
+        var credit=row();credit.putAll(Map.of("date","2025-10-20","direction","EXPENSE","category","外卖","amount",30,"debtKind","CREDIT","debtPlatform","测试平台"));
+        var pay=row();pay.putAll(Map.of("date","2025-10-21","direction","EXPENSE","category","手续费","amount",31,"debtKind","REPAYMENT","debtPlatform","测试平台","debtFee",1));
+        assertEquals(false,service.preview(backup(Map.of("ledger",List.of(old,pay)))).get("valid"));
+        assertEquals(2,service.restore(backup(Map.of("ledger",List.of(old,credit))),"merge").get("imported"));
+        assertNull(store.get("ledger").get(old.get("id")).get("debtKind"));
+        assertEquals(1,service.restore(backup(Map.of("ledger",List.of(pay))),"merge").get("imported"));
+        var exported=service.export();store.values().forEach(Map::clear);
+        assertEquals(3,service.restore(exported,"merge").get("imported"));
+        assertEquals(new BigDecimal("1"),store.get("ledger").get(pay.get("id")).get("debtFee"));
+        assertEquals(0,service.restore(exported,"merge").get("imported"));
+        store.values().forEach(Map::clear);credit.put("deleted",true);
+        assertEquals(false,service.preview(backup(Map.of("ledger",List.of(credit,pay)))).get("valid"));
+    }
     @Test void activeJournalCanRestoreItsHistoricalReferenceToDeletedTask(){
         var task=task();task.put("deleted",true);var journal=journal(task);
         var backup=backup(Map.of("journal",List.of(journal),"tasks",List.of(task)));

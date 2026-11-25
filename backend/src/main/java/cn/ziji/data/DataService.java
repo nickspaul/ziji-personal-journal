@@ -1,6 +1,7 @@
 package cn.ziji.data;
 
 import cn.ziji.domain.BehaviorCalculator;
+import cn.ziji.ledger.DebtAccounting;
 import cn.ziji.web.ApiException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -31,9 +32,11 @@ public class DataService {
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> create(String collection,Map<String,Object> input) {
         registry.require(collection);String id=input.get("id")==null?UUID.randomUUID().toString():DataValidator.uuid(input.get("id"));
+        lockLedger(collection);
         Map<String,Object> existing=repository.find(collection,id);
         if(existing!=null)return idempotent(collection,input,existing);
         Map<String,Object> normalized=validator.normalize(collection,input,null,false);
+        verifyLedgerChange(collection,id,null,normalized);
         Map<String,List<Map<String,Object>>> current=SchemaRegistry.usesBehaviorState(collection)?state():Map.of();checkReferences(collection,normalized,null,current);
         Map<String,Object> enriched=BehaviorCalculator.enrich(collection,normalized,null,current);
         enriched=new LinkedHashMap<>(enriched);enriched.put("id",id);enriched.put("version",1L);enriched.put("createdAt",DataValidator.now());enriched.put("updatedAt",DataValidator.now());enriched.put("deleted",false);
@@ -51,10 +54,12 @@ public class DataService {
     private boolean same(Object a,Object b){if(a==null||b==null)return a==b;if(a instanceof Number&&b instanceof Number)return new BigDecimal(a.toString()).compareTo(new BigDecimal(b.toString()))==0;return a.equals(b);}
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> update(String collection,String id,Map<String,Object> input) {
+        lockLedger(collection);
         Map<String,Object> previous=require(collection,id);if(Boolean.TRUE.equals(previous.get("deleted")))throw new ApiException(409,"请先恢复这条记录");
         long expected=version(input.get("version"));
         if(!SchemaRegistry.isJournalCollection(collection)&&expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         Map<String,Object> normalized=validator.normalize(collection,input,previous,false);
+        verifyLedgerChange(collection,id,previous,normalized);
         if(SchemaRegistry.isJournalCollection(collection)&&sameBusiness(collection,normalized,previous))return previous;
         if(expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         protectHistoricalReferences(collection,id,previous,normalized);
@@ -94,24 +99,43 @@ public class DataService {
     public static long version(Object value){try{long v=new BigDecimal(String.valueOf(value)).longValueExact();if(v<1)throw new Exception();return v;}catch(Exception e){throw new IllegalArgumentException("缺少有效的记录版本，请刷新后重试");}}
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> delete(String collection,String id,long expected) {
+        lockLedger(collection);
         Map<String,Object> previous=require(collection,id);if(expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         if(Boolean.TRUE.equals(previous.get("deleted")))return previous;
+        verifyLedgerChange(collection,id,previous,null);
         if(collection.equals("sessions")&&list("drinks",false).stream().anyMatch(r->id.equals(r.get("sessionId"))))throw new ApiException(409,"场次还有饮酒明细，请先删除或转移明细");
         Map<String,Object> next=new LinkedHashMap<>(previous);next.put("deleted",true);next.put("version",expected+1);next.put("updatedAt",DataValidator.now());
         if(!repository.update(collection,next,expected))throw ApiException.conflict();repository.audit("DELETE",collection,id,previous,next);return next;
     }
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public Map<String,Object> restore(String collection,String id,long expected) {
+        lockLedger(collection);
         Map<String,Object> previous=require(collection,id);if(expected!=((Number)previous.get("version")).longValue())throw ApiException.conflict();
         if(!Boolean.TRUE.equals(previous.get("deleted")))return previous;
         Map<String,List<Map<String,Object>>> current=SchemaRegistry.usesBehaviorState(collection)?state():Map.of();checkReferences(collection,previous,previous,current);
         if(collection.equals("drinks")&&current.get("sessions").stream().noneMatch(r->Objects.equals(r.get("id"),previous.get("sessionId"))))throw new ApiException(409,"请先恢复对应的饮酒场次");
         Map<String,Object> next=new LinkedHashMap<>(previous);next.put("deleted",false);next.put("version",expected+1);next.put("updatedAt",DataValidator.now());
+        verifyLedgerChange(collection,id,null,next);
         next=BehaviorCalculator.fillMissingCost(collection,next,current);
         if(!repository.update(collection,next,expected))throw ApiException.conflict();repository.audit("RESTORE",collection,id,previous,next);
         if(collection.equals("products"))fillMissingCostsFor(id);
         if(collection.equals("prices"))fillMissingCostsFor(String.valueOf(next.get("productId")));
         return next;
+    }
+    // Use the existing singleton to serialize read/validate/write, including the first transaction for a new platform.
+    private void lockLedger(String collection) {
+        if ("ledger".equals(collection)) repository.lockSettings();
+    }
+    private void verifyLedgerChange(String collection,String id,Map<String,Object> before,Map<String,Object> after) {
+        if (!"ledger".equals(collection)) return;
+        Set<String> platforms = new LinkedHashSet<>();
+        if (before != null && before.get("debtPlatform") != null) platforms.add((String)before.get("debtPlatform"));
+        if (after != null && after.get("debtPlatform") != null) platforms.add((String)after.get("debtPlatform"));
+        for (String platform : platforms) {
+            var history = new ArrayList<>(repository.debtHistoryExcept(platform,id));
+            if (after != null && platform.equals(after.get("debtPlatform"))) history.add(after);
+            DebtAccounting.validateHistory(history);
+        }
     }
     private void protectHistoricalReferences(String collection,String id,Map<String,Object> before,Map<String,Object> after) {
         if(collection.equals("products")&&!Objects.equals(before.get("kind"),after.get("kind"))) {

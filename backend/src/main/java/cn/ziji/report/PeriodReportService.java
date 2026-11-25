@@ -3,6 +3,7 @@ package cn.ziji.report;
 import cn.ziji.data.*;
 import cn.ziji.domain.BehaviorCalculator;
 import cn.ziji.journal.TaskEffortService;
+import cn.ziji.ledger.DebtAccounting;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,6 +67,12 @@ public class PeriodReportService {
             for(var row:raw) {
                 var record=fields(key,row);
                 switch(key) {
+                    case "ledger" -> {
+                        record.put("计入支出（元）",DebtAccounting.expense(row));
+                        record.put("现金流出（元）",DebtAccounting.cashOutflow(row));
+                        if (row.get("debtKind") != null)
+                            record.put("欠款本金变动（元）",DebtAccounting.principalChange(row));
+                    }
                     case "journal" -> put(record,"关联待办",taskTitles.get(row.get("taskId")));
                     case "tasks" -> {
                         put(record,"创建日期",day(row.get("createdAt")));
@@ -107,10 +114,13 @@ public class PeriodReportService {
             }
             String rule=switch(key) {
                 case "ledger" -> {
-                    BigDecimal income=amount(raw,"INCOME"),expense=amount(raw,"EXPENSE");
+                    BigDecimal income=amount(raw,"INCOME");
+                    BigDecimal expense=raw.stream().map(DebtAccounting::expense).reduce(BigDecimal.ZERO,BigDecimal::add);
+                    summary.put("现金流出（元）",raw.stream().map(DebtAccounting::cashOutflow).reduce(BigDecimal.ZERO,BigDecimal::add));
+                    summary.put("期间欠款本金净变动（元）",raw.stream().map(DebtAccounting::principalChange).reduce(BigDecimal.ZERO,BigDecimal::add));
                     summary.put("收入（元）",income);summary.put("支出（元）",expense);
                     summary.put("期间结余（元）",income.subtract(expense));
-                    yield "按实际收付日期统计人民币金额。期间结余等于收入减支出。";
+                    yield "按记账日期统计。信用消费在购买时计支出，还款只将利息和手续费计为支出。现金流出含还款本金，期初欠款只增加本金。结余按收入减支出计算。";
                 }
                 case "journal" -> "按发生日期筛选，跨日事项与所选日期有交集即列出一次，保留完整起止时间。手填时长指整条记录。";
                 case "tasks" -> "列出期间创建、安排、到期、完成或有关联日志的待办。状态及结果取导出时的记录。同时选择生活日志时汇总投入，精确时段只计范围内的分钟并去重，跨越边界的手填时长不作分摊。";

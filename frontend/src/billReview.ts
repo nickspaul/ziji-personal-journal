@@ -12,7 +12,7 @@ function monthText(i:number) {return Math.floor(i/12)+'-'+String(i%12+1).padStar
 export function billSuggestions(rows:LedgerRow[],today:string):BillSuggestion[] {
   const groups=new Map<string,LedgerRow[]>()
   for(const row of rows) {
-    if(row.deleted || row.direction!=='EXPENSE' || row.date>today || index(row.date)<index(today)-4)continue
+    if(row.deleted || row.debtKind || row.direction!=='EXPENSE' || row.date>today || index(row.date)<index(today)-4)continue
     const title=row.notes?.trim() || row.category
     if(title.length>100 || /[\r\n]/.test(title))continue
     const key=JSON.stringify([title,row.category,Math.round(Number(row.amount)*100)])

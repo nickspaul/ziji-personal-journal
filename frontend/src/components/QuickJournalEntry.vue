@@ -4,6 +4,7 @@ import { Check, PencilLine, X } from 'lucide-vue-next'
 import { api } from '../api'
 import { journalCategories, journalPeriods } from '../journal'
 import type { JournalFacets } from '../journal'
+import { platformPresets } from '../ledgerReview'
 import { parseQuickJournal } from '../quickJournal'
 import type { QuickDraft } from '../quickJournal'
 import { shanghaiDate } from '../types'
@@ -15,6 +16,7 @@ const emit = defineEmits<{ close: []; saved: [result: { journal?: Row; ledger?: 
 const dialog = ref<HTMLDialogElement>(), peopleInput = ref<InstanceType<typeof TagInput>>(), tagsInput = ref<InstanceType<typeof TagInput>>()
 const sentence = ref(''), parsed = ref(''), draft = ref<QuickDraft>()
 const journalSelected = ref(true), expenseSelected = ref(false), busy = ref(false), error = ref('')
+const credit = ref(false), platform = ref('')
 const requestId = crypto.randomUUID()
 const stale = computed(() => parsed.value !== sentence.value.trim())
 const categories = ref(['餐饮', '交通', '购物', '居住', '学习', '休闲', '医疗', '其他'])
@@ -41,6 +43,7 @@ function preview() {
   journalSelected.value = true
   expenseSelected.value = !!draft.value.amount
   customCategory.value = false
+  credit.value = false; platform.value = ''
   parsed.value = value
   error.value = ''
 }
@@ -56,9 +59,10 @@ async function save() {
   }
   const amount = String(entry.amount).trim()
   if (expenseSelected.value && (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || Number(amount) > 999_999_999 || !entry.expenseCategory.trim())) {
-    error.value = '请填写支出分类和本人实付金额，金额须大于 0，最多两位小数。'
+    error.value = '请填写支出分类和本次消费金额，金额须大于 0，最多两位小数。'
     return
   }
+  if (expenseSelected.value && credit.value && !platform.value.trim()) { error.value='请选择或输入信用支付平台。'; return }
   busy.value = true
   try {
     const result = await api<{journal?: Row; ledger?: Row}>('/journal/quick-entry', {
@@ -72,6 +76,7 @@ async function save() {
         } : null,
         ledger: expenseSelected.value ? {
           date: entry.date, direction: 'EXPENSE', amount, category: entry.expenseCategory.trim(), notes: entry.notes.trim() || null,
+          ...(credit.value ? {debtKind:'CREDIT',debtPlatform:platform.value.trim()} : {}),
         } : null,
       }),
     })
@@ -106,12 +111,14 @@ async function save() {
           </fieldset>
         </section>
         <section class="card">
-          <label class="choice"><input v-model="expenseSelected" type="checkbox" :disabled="busy"/>实际支出</label>
+          <label class="choice"><input v-model="expenseSelected" type="checkbox" :disabled="busy"/>记一笔消费</label>
           <p v-if="draft.paymentHint" class="note">{{draft.paymentHint}}</p>
           <fieldset v-if="expenseSelected" :disabled="busy" class="fields">
-            <label>本人实付（元）<input v-model="draft.amount" inputmode="decimal" required placeholder="0.00"/></label>
+            <label>{{ credit ? '信用消费金额' : '本人实付' }}（元）<input v-model="draft.amount" inputmode="decimal" required placeholder="0.00"/></label>
             <label>支出分类<select v-model="categoryChoice"><option v-for="category in categories" :key="category" :value="category">{{category}}</option><option value="">自定义分类…</option></select></label>
             <label v-if="customCategory" class="wide">新分类名称<input v-model="draft.expenseCategory" maxlength="40" required/></label>
+            <label class="wide choice"><input type="checkbox" v-model="credit"/>使用平台信用支付</label>
+            <label v-if="credit" class="wide">欠款平台<input v-model.trim="platform" list="quick-credit-platforms" required maxlength="40" placeholder="选择或输入平台"/><datalist id="quick-credit-platforms"><option v-for="item in platformPresets" :key="item" :value="item"/></datalist><small>这次计消费并增加欠款。还本金时只减少欠款。</small></label>
             <label class="wide">账本备注<input v-model="draft.notes" maxlength="500"/></label>
           </fieldset>
         </section>

@@ -21,8 +21,8 @@ function sessions(link:any){return(link?.sessionIds||[]).map((id:string)=>state.
 </script>
 
 <template>
-<section class="panel association-detail-panel">
-  <header class="panel-header"><div><span class="eyebrow">RECORDS IN CONTEXT</span><h3>关联到哪一次饮酒</h3></div><span class="tag">逐条可查</span></header>
+<details class="panel association-detail-panel">
+  <summary><span>查看逐条饮酒关联</span><ChevronDown :size="16"/></summary>
   <div class="association-controls"><div class="segmented"><button :class="{active:kind==='smoking'}" @click="kind='smoking'"><Cigarette :size="15"/>吸烟</button><button :class="{active:kind==='intimacy'}" @click="kind='intimacy'"><Heart :size="15"/>私人行为</button></div><label v-if="kind==='intimacy'"><span>类型</span><select v-model="privateType" aria-label="私人行为类型"><option value="ALL">全部类型</option><option v-for="(label,type) in privateActivityLabels" :key="type" :value="type">{{label}}</option></select></label><label><span>查看</span><select v-model="filter" aria-label="饮酒关联筛选"><option value="ALL">全部记录</option><option value="RELATED">已关联饮酒</option><option value="UNCERTAIN">待判断</option></select></label></div>
   <div v-if="!visible.length" class="empty-state compact"><Clock3 :size="25"/><p>{{allRows.length?'当前筛选下没有记录。':'所选时间内还没有这类记录。'}}</p></div>
   <div v-else class="association-records">
@@ -34,5 +34,21 @@ function sessions(link:any){return(link?.sessionIds||[]).map((id:string)=>state.
     </article>
   </div>
   <footer class="association-detail-footer"><span>当前筛选 {{filtered.length}} 条 · 按发生时间排列</span><button v-if="limit<filtered.length" class="text-link" @click="limit+=12">再看 12 条 <ChevronDown :size="14"/></button></footer>
-</section>
+</details>
 </template>
+
+<style scoped>
+.association-detail-panel { margin: 0; }
+.association-detail-panel > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 13px 18px; list-style: none; cursor: pointer; font-size: 14px; font-weight: 550; }
+.association-detail-panel > summary::-webkit-details-marker { display: none; }
+.association-detail-panel > summary svg { color: var(--muted); }
+.association-detail-panel[open] > summary { border-bottom: 1px solid var(--border); }
+.association-detail-panel[open] > summary svg { transform: rotate(180deg); }
+.association-controls { margin: 12px 16px 0; justify-content: flex-start; flex-wrap: wrap; }
+.association-controls select, .association-controls label, .association-detail-footer { font-size: 12px; }
+.association-records { padding: 0 16px; }
+.association-record { padding: 12px 0; }
+.association-record-top strong { font-size: 13px; }
+.association-record-top > div > span, .association-record > p { font-size: 12px; }
+.association-record-top .tag { font-size: 11px; }
+</style>

@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import type { Bootstrap, Analytics, Row } from './types'
-export const state = reactive({configured:false,authenticated:false,csrfToken:'',checking:true,loading:false,error:'',collections:{} as Record<string,Row[]>,settings:{} as Record<string,any>,schema:[] as Bootstrap['schema'],health:[] as Row[],analytics:{} as Analytics,lifetimeSummary:{} as Analytics,lifetimeLoading:false,lifetimeError:''})
+export const state = reactive({configured:false,authenticated:false,csrfToken:'',checking:true,loading:false,error:'',collections:{} as Record<string,Row[]>,settings:{} as Record<string,any>,schema:[] as Bootstrap['schema'],analytics:{} as Analytics,lifetimeSummary:{} as Analytics,lifetimeLoading:false,lifetimeError:''})
 let analyticsRequest=0,lifetimeRequest=0
 export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
  const headers:Record<string,string>={...(options.headers as Record<string,string>||{})}
@@ -15,7 +15,7 @@ export async function api<T=any>(path:string,options:RequestInit={}):Promise<T>{
 }
 export async function authStatus(){const a=await api<{configured:boolean;authenticated:boolean;csrfToken:string}>('/auth/status');Object.assign(state,a);state.checking=false;return a}
 export async function authenticate(password:string){await api(state.configured?'/auth/login':'/auth/setup',{method:'POST',body:JSON.stringify({password})});await authStatus();await refresh()}
-export async function refresh(){state.loading=true;try{const b=await api<Bootstrap>('/bootstrap');state.collections=b.collections||{};state.settings=b.settings||{};state.schema=b.schema||[];state.health=b.health||[];state.error=''}catch(e){state.error=(e as Error).message;throw e}finally{state.loading=false}}
+export async function refresh(){state.loading=true;try{const b=await api<Bootstrap>('/bootstrap');state.collections=b.collections||{};state.settings=b.settings||{};state.schema=b.schema||[];state.error=''}catch(e){state.error=(e as Error).message;throw e}finally{state.loading=false}}
 export async function refreshAnalytics(from:string,to:string){const request=++analyticsRequest;if(state.analytics.from!==from||state.analytics.to!==to)state.analytics={from,to};try{const result=await api<Analytics>(`/analytics?from=${from}&to=${to}`);if(request===analyticsRequest&&state.authenticated)state.analytics=result}catch(e){if(request===analyticsRequest&&state.authenticated)state.analytics={from,to,warnings:[(e as Error).message]}}}
 export async function refreshLifetimeSummary(){const request=++lifetimeRequest;state.lifetimeLoading=true;state.lifetimeError='';try{const result=await api<Analytics>('/analytics/summary');if(request===lifetimeRequest&&state.authenticated)state.lifetimeSummary=result}catch(e){if(request===lifetimeRequest&&state.authenticated){state.lifetimeSummary={};state.lifetimeError=(e as Error).message}}finally{if(request===lifetimeRequest)state.lifetimeLoading=false}}
 export async function saveRow(collection:string,fields:Record<string,any>,row?:Row){return api<Row>(`/data/${collection}${row?`/${row.id}`:''}`,{method:row?'PUT':'POST',body:JSON.stringify({...fields,...(row?{version:row.version}:{id:fields.id||crypto.randomUUID()})})})}

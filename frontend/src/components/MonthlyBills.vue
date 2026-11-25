@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed,nextTick,onMounted,ref,watch} from 'vue'
+import {computed,onMounted,ref,watch} from 'vue'
 import {CalendarClock,Check,Plus,X} from 'lucide-vue-next'
 import {api,deleteRow,saveRow} from '../api'
 import {money,shanghaiDate} from '../types'
@@ -82,16 +82,15 @@ async function remove() {
   try {await deleteRow('bills',active.value);await load();mode.value='list';emit('notify','固定账单已移入回收站。')}
   catch(e){editError.value=(e as Error).message}finally{busy.value=false}
 }
-async function add() {show();await nextTick();edit()}
 </script>
 <template>
-  <section class="panel monthly-bills" aria-label="固定扣款">
-    <header><div><CalendarClock :size="17"/><h2>固定扣款</h2><small>今天起 7 天 · 含逾期</small></div><button class="text-link" @click="show">管理账单{{suggestions.length?' · '+suggestions.length+' 个建议':''}}</button></header>
+  <section v-if="error || upcoming.length" class="panel monthly-bills" aria-label="固定扣款">
+    <header><div><CalendarClock :size="17"/><h2>固定扣款</h2><small>从今天 {{today}} 起 7 天 · 含逾期</small></div><button class="text-link" @click="show">管理账单{{suggestions.length?' · '+suggestions.length+' 个建议':''}}</button></header>
     <p v-if="error" class="error-box" role="alert">{{error}} <button class="text-link" @click="load">重试</button></p>
     <div v-else-if="upcoming.length" class="due-list"><div v-for="b in upcoming" :key="b.id"><span class="sensitive">{{b.title}} <strong>{{money(b.amount)}}</strong></span>
       <small>{{ b.nextDue }}{{b.nextDue<today?' · 已过期':b.nextDue===today?' · 今天':''}}</small><button class="text-link" @click="review(b,'pay')">核对付款</button></div></div>
-    <p v-else class="quiet">{{loading?'读取中…':'这几天没有待付的固定账单。'}} <button class="text-link" @click="add">新增</button></p>
   </section>
+  <div v-else class="bill-shortcut"><button type="button" class="text-link" @click="show"><CalendarClock :size="15"/>固定扣款{{suggestions.length?' · '+suggestions.length+' 个建议':''}}</button><small v-if="loading">读取中…</small></div>
   <dialog ref="dialog" class="bill-dialog" aria-label="管理固定账单" @cancel.prevent="close">
     <header><h2>{{mode==='form'?(active?'修改固定账单':'新增固定账单'):mode==='pay'?'核对本期扣款':mode==='delete'?'停止固定扣款':'每月固定账单'}}</h2><button class="icon-button" aria-label="关闭账单管理" :disabled="busy" @click="close"><X :size="16"/></button></header>
     <template v-if="mode==='list'">
@@ -114,7 +113,7 @@ async function add() {show();await nextTick();edit()}
     </form>
     <template v-else-if="active">
       <p class="sensitive">{{active.title}} · {{money(active.amount)}} · 本期应付 {{active.nextDue}}</p>
-      <template v-if="mode==='pay'"><label class="field"><span>实际付款日期</span><input v-model="paidDate" type="date" :max="today" required/></label><p class="quiet">确认后记一笔支出，推进到下个月。如果已经手动记过，选“跳过本期”。</p>
+      <template v-if="mode==='pay'"><label class="field"><span>实际付款日期</span><input v-model="paidDate" type="date" :max="today" required/></label><p class="quiet">确认后新增一笔普通支出。若已手动登记，可跳过本期。平台还款请在“平台负债”记还款，再跳过本期。</p>
         <footer><button class="button secondary" :disabled="busy" @click="mode='list'">返回</button><button class="button secondary" :disabled="busy" @click="settle(true)">跳过本期</button><button class="button primary" :disabled="busy||!paidDate||paidDate>today" @click="settle(false)">已付款，记入账本</button></footer>
       </template><template v-else><p class="quiet">停止后不再提示扣款。可在数据管理的回收站恢复规则。</p><footer><button class="button secondary" @click="mode='list'">取消</button><button class="button primary" :disabled="busy" @click="remove">确认停止</button></footer></template>
     </template>
@@ -122,5 +121,6 @@ async function add() {show();await nextTick();edit()}
   </dialog>
 </template>
 <style scoped>
+.bill-shortcut{display:flex;align-items:center;justify-content:flex-end;gap:8px}.bill-shortcut .text-link{font-size:12px}.bill-shortcut small{color:var(--muted)}
 .monthly-bills{padding:16px 18px}.monthly-bills header,.monthly-bills header>div,.bill-dialog header,.bill-dialog footer,.rules-list>div,.due-list>div{display:flex;align-items:center;gap:10px}.monthly-bills header,.bill-dialog header{justify-content:space-between}.monthly-bills h2,.bill-dialog h2,.bill-dialog h3{margin:0;font-size:15px}.monthly-bills header svg{color:var(--mint)}.monthly-bills small,.bill-dialog small,.quiet{color:var(--muted);font-size:12px}.monthly-bills p{margin:8px 0 0}.due-list>div,.rules-list>div{padding:9px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}.due-list>div>span,.rules-list>div>div{flex:1;overflow-wrap:anywhere}.due-list strong{margin-left:5px}.monthly-bills .text-link,.bill-dialog .text-link{font-size:12px}.bill-dialog{box-sizing:border-box;width:min(510px,calc(100vw - 24px));max-height:82vh;overflow:auto;margin:auto;padding:20px;border:1px solid var(--border);border-radius:14px;color:var(--text);background:var(--panel);font-size:13px}.bill-dialog::backdrop{background:#0a0c12b3}.bill-dialog header{margin-bottom:16px}.bill-dialog h3{margin-top:18px}.rules-list small{display:block;margin-top:4px}.bill-dialog footer{justify-content:flex-end;flex-wrap:wrap;margin-top:14px}.rules-list{max-height:230px;overflow:auto}.bill-dialog p{line-height:1.6}@media(max-width:520px){.monthly-bills header,.monthly-bills header>div{flex-wrap:wrap}.bill-dialog{padding:14px}}
 </style>

@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import {computed,ref,watch} from 'vue'
+import {computed,ref,watch,onBeforeUnmount} from 'vue'
 import {Search,Plus,Trash2,Pencil,RotateCcw,ChevronLeft,ChevronRight,Download,Database,SlidersHorizontal,FileClock,Eye,X,Calculator,Info,ArrowDown,ArrowUp,BookOpen,CheckSquare,Cigarette,Wine,Heart,Package,Activity,Archive,FileText,Wallet} from 'lucide-vue-next'
 import {recordCostLabel} from '../productPricing'
 import {dataGroups,dataGuide,preferredColumns,derivedColumns,valueFor,matchesRecord,compareRecords,calculationNotes,csvCell} from '../dataManagement'
 import RecalculateDialog from './RecalculateDialog.vue'
+import Products from './Products.vue'
+import {recordDrafts} from '../drafts'
+import {productName} from '../productPricing'
 import LifeJournal from './LifeJournal.vue'
 import {api,state,deleteRow,restoreRow,refresh} from '../api'
 import type {Row,Field} from '../types'
 import {collectionLabels,shanghaiDate} from '../types'
 
-const props=defineProps<{collection?:string;manager?:boolean;refreshKey?:number}>()
-const emit=defineEmits<{edit:[collection:string,row?:Row,preset?:Record<string,any>];changed:[];notify:[message:string]}>()
+const props=defineProps<{collection?:string;productFilter?:string;manager?:boolean;refreshKey?:number}>()
+const emit=defineEmits<{edit:[collection:string,row?:Row,preset?:Record<string,any>];changed:[];notify:[message:string];choose:[name:string,product?:string]}>()
 const selectedCollection=ref(props.collection||'smoking'),search=ref(''),page=ref(1),pageSize=ref(20)
+const productView=ref<'catalog'|'table'>('catalog')
+const productFilterName=computed(()=>productName(state.collections.products?.find(p=>p.id===props.productFilter))||'指定商品')
 const trash=ref(false),fetchedRows=ref<Row[]>([]),rowsLoading=ref(false),error=ref(''),busy=ref(false)
 const selected=ref<string[]>([]),confirmDelete=ref<Row[]|null>(null),inspecting=ref<Row|null>(null),audit=ref<any[]|null>(null),recalcRow=ref<Row|null>(null)
 const sortKey=ref('recordDate'),sortDirection=ref('desc'),columnChoices=ref<Record<string,string[]>>({}),legacyOpen=ref(false),guideOpen=ref(false)
@@ -25,7 +30,7 @@ const availableFields=computed(()=>[...(schema.value?.fields||[]),...(derivedCol
 const chosenColumns=computed({get:()=>columnChoices.value[selectedCollection.value]||preferredColumns[selectedCollection.value]||availableFields.value.slice(0,6).map(f=>f.key),set:(v:string[])=>columnChoices.value[selectedCollection.value]=v})
 const displayFields=computed(()=>chosenColumns.value.map(key=>availableFields.value.find(f=>f.key===key)).filter(Boolean) as Field[])
 const rows=computed(()=>(trash.value||['ledger','bills'].includes(selectedCollection.value))?fetchedRows.value:state.collections[selectedCollection.value]||[])
-const filtered=computed(()=>rows.value.filter(r=>matchesRecord(r,availableFields.value,state.collections,search.value)).sort((a,b)=>compareRecords(a,b,sortKey.value,sortDirection.value,availableFields.value,state.collections)))
+const filtered=computed(()=>rows.value.filter(r=>!props.productFilter||selectedCollection.value!=='prices'||r.productId===props.productFilter).filter(r=>matchesRecord(r,availableFields.value,state.collections,search.value)).sort((a,b)=>compareRecords(a,b,sortKey.value,sortDirection.value,availableFields.value,state.collections)))
 const pages=computed(()=>Math.max(1,Math.ceil(filtered.value.length/pageSize.value)))
 const visible=computed(()=>filtered.value.slice((page.value-1)*pageSize.value,page.value*pageSize.value))
 const hasCost=computed(()=>['smoking','drinks'].includes(selectedCollection.value))
@@ -52,17 +57,31 @@ async function loadRows() {
   }
 }
 watch(()=>props.collection,v=>{if(v)selectedCollection.value=v})
-watch(selectedCollection,()=>{search.value='';trash.value=false;page.value=1;selected.value=[];error.value='';guideOpen.value=false;sortKey.value='recordDate';sortDirection.value='desc'})
-watch(trash,()=>{selected.value=[];page.value=1;error.value=''})
+function choose(name:string, product?:string) {emit('choose',name,product)}
+function remember(name:string) {
+  if (state.authenticated) recordDrafts['manager-'+name]={search:search.value,page:page.value,pageSize:pageSize.value,trash:trash.value,sortKey:sortKey.value,sortDirection:sortDirection.value,productView:productView.value}
+}
+function recall(name:string) {
+  const saved = recordDrafts['manager-'+name]
+  search.value=saved?.search||''; trash.value=saved?.trash||false; pageSize.value=saved?.pageSize||20
+  sortKey.value=saved?.sortKey||'recordDate'; sortDirection.value=saved?.sortDirection||'desc'
+  productView.value=saved?.productView||'catalog'; page.value=saved?.page||1
+  selected.value=[]; error.value=''; guideOpen.value=false; inspecting.value=null
+}
+const viewKey=computed(()=>selectedCollection.value==='prices' && props.productFilter ? 'prices/'+props.productFilter : selectedCollection.value)
+recall(viewKey.value)
+watch(viewKey,(name,old)=>{remember(old);recall(name)})
+onBeforeUnmount(()=>remember(viewKey.value))
+watch(trash,()=>{selected.value=[];page.value=1;error.value=''},{flush:'sync'})
 watch([selectedCollection,trash,()=>state.collections],()=>{selected.value=[];void loadRows()},{immediate:true})
-watch([search,pageSize,sortKey,sortDirection],()=>{page.value=1;selected.value=[]})
+watch([search,pageSize,sortKey,sortDirection],()=>{page.value=1;selected.value=[]},{flush:'sync'})
 watch(page,()=>selected.value=[])
-watch(pages,v=>{page.value=Math.min(page.value,v)})
+watch([pages,rowsLoading],([v,loading])=>{if(!loading)page.value=Math.min(page.value,v)})
 function sortBy(field:Field){if(sortKey.value===field.key)sortDirection.value=sortDirection.value==='asc'?'desc':'asc';else{sortKey.value=field.key;sortDirection.value='asc'}}
 function toggleAll(){selected.value=allSelected.value?[]:visible.value.map(r=>r.id)}
 function alcoholLink(row:Row){return (selectedCollection.value==='smoking'?state.analytics.smokingLinks:state.analytics.links)?.[row.id]}
 function outsideAnalysis(row:Row){const day=String(row.occurredAt||'').slice(0,10);return !!day&&!!state.analytics.from&&!!state.analytics.to&&(day<state.analytics.from||day>state.analytics.to)}
-function alcoholReason(row:Row){return alcoholLink(row)?.reason||(outsideAnalysis(row)?`这条记录不在当前分析日期 ${state.analytics.from} 至 ${state.analytics.to} 内，尚未生成关联结果；并非记录有误。`:'尚未取得关联结果，可刷新数据或在统计分析页查看判断依据。')}
+function alcoholReason(row:Row){return alcoholLink(row)?.reason||(outsideAnalysis(row)?`这条记录不在当前分析日期 ${state.analytics.from} 至 ${state.analytics.to} 内，尚未生成关联结果；并非记录有误。`:'尚未取得关联结果，可刷新数据或在行为分析页查看判断依据。')}
 function alcoholLinkLabel(row:Row){const link=alcoholLink(row);if(!link)return outsideAnalysis(row)?'分析范围外':'尚未分析';if(link.source==='MANUAL')return link.effective==='YES'?'本人确认酒后':link.effective==='NO'?'本人确认非酒后':'本人不确定';return ({DURING_DRINKING:'饮酒期间',POSSIBLE_AFTER_DRINKING:'估算酒后',RECENT_RECORDED_DRINKING:'近期有饮酒',NO_RECORDED_RECENT_DRINKING:'未找到饮酒记录',INSUFFICIENT_DATA:'信息不足'} as Record<string,string>)[link.status]||'尚未分析'}
 async function remove(){
   if(!confirmDelete.value)return
@@ -91,26 +110,33 @@ function auditTitle(item:any){const row=item.after||item.before||{};return row.t
         <button v-if="group.legacy" class="data-group-toggle" :aria-expanded="legacyOpen" @click="legacyOpen=!legacyOpen"><ChevronRight :size="13" :class="{expanded:legacyOpen}"/>{{group.label}}</button>
         <h4 v-else>{{group.label}}</h4>
         <div v-if="!group.legacy||legacyOpen" class="data-nav-group">
-          <button v-for="name in group.collections" :key="name" :class="{active:selectedCollection===name}" :aria-current="selectedCollection===name?'page':undefined" @click="selectedCollection=name">
+          <button v-for="name in group.collections" :key="name" :class="{active:selectedCollection===name}" :aria-current="selectedCollection===name?'page':undefined" @click="choose(name)">
             <component :is="icons[name]||Database" :size="15"/><span>{{label(name)}}</span><small v-if="!['journal','tasks','ledger','bills'].includes(name)" class="sensitive">{{state.collections[name]?.length||0}}</small>
           </button>
         </div>
       </template>
-      <p class="data-nav-foot">兼容数据保留旧记录，<br/>日常使用无需维护。</p>
+      <p v-if="legacyOpen" class="data-nav-foot">这里保留早期版本的记录。</p>
       <button class="data-audit-link" @click="showAudit"><FileClock :size="14"/>操作历史</button>
     </aside>
     <div class="data-workspace">
-      <label v-if="manager" class="data-mobile-nav">数据分类<select v-model="selectedCollection"><optgroup v-for="group in groups" :key="group.label" :label="group.label"><option v-for="name in group.collections" :key="name" :value="name">{{label(name)}}</option></optgroup></select></label>
+      <label v-if="manager" class="data-mobile-nav">数据分类<select :value="selectedCollection" @change="choose(($event.target as HTMLSelectElement).value)"><optgroup v-for="group in groups" :key="group.label" :label="group.label"><option v-for="name in group.collections" :key="name" :value="name">{{label(name)}}</option></optgroup></select></label>
       <p v-if="error" class="error-box" role="alert">{{error}}</p>
       <section v-if="guide" class="data-context">
-        <div><span class="data-context-dot"></span><p>{{guide.summary}}</p><button class="text-link" :aria-expanded="guideOpen" @click="guideOpen=!guideOpen"><Info :size="14"/>用途与规则<ChevronRight :size="13" :class="{expanded:guideOpen}"/></button></div>
+        <div><p>{{guide.summary}}</p><button class="text-link" :aria-expanded="guideOpen" @click="guideOpen=!guideOpen"><Info :size="14"/>用途与规则<ChevronRight :size="13" :class="{expanded:guideOpen}"/></button></div>
         <div v-if="guideOpen" class="data-guide"><p><strong>用在哪里</strong>{{guide.usage}}</p><ul><li v-for="rule in guide.rules" :key="rule">{{rule}}</li></ul></div>
       </section>
-      <LifeJournal v-if="pagedCollection" :key="selectedCollection" :initial-collection="selectedCollection==='tasks'?'tasks':'journal'" :refresh-key="refreshKey" management/>
+      <div v-if="selectedCollection==='products'" class="manager-views segmented" aria-label="商品视图">
+        <button :aria-pressed="productView==='catalog'" :class="{active:productView==='catalog'}" @click="productView='catalog'">商品与单价</button>
+        <button :aria-pressed="productView==='table'" :class="{active:productView==='table'}" @click="productView='table'">表格维护</button>
+        <button @click="choose('prices')">全部价格历史</button>
+      </div>
+      <div v-if="selectedCollection==='prices' && productFilter" class="manager-views"><span class="sensitive">{{productFilterName}} · 价格历史</span> <button class="text-link" @click="choose('prices')">查看全部商品</button></div>
+      <Products v-if="selectedCollection==='products' && productView==='catalog'" :key="selectedCollection" @edit="(c,r,p)=>emit('edit',c,r,p)" @notify="emit('notify',$event)" @changed="emit('changed')" @prices="choose('prices',$event)"/>
+      <LifeJournal v-else-if="pagedCollection" :key="selectedCollection" :initial-collection="selectedCollection==='tasks'?'tasks':'journal'" :refresh-key="refreshKey" management/>
       <section v-else class="panel table-panel data-table">
         <header class="table-heading">
-          <div><h3>{{label(selectedCollection)}}<span v-if="trash" class="tag">回收站</span><span class="count-badge sensitive">{{rows.length}}</span></h3><p>{{trash?'已删除的数据，可恢复后继续使用':'全部日期 · 点击列名排序，点击详情查看依据'}}</p></div>
-          <div class="toolbar"><button class="button secondary compact-button" :disabled="!filtered.length||rowsLoading" @click="exportRows"><Download :size="14"/>导出结果</button><button v-if="!trash" class="button primary compact-button" @click="emit('edit',selectedCollection)"><Plus :size="15"/>新增</button></div>
+          <div><h3>{{label(selectedCollection)}}<span v-if="trash" class="tag">回收站</span><small class="table-count sensitive">{{rows.length}} 条</small></h3><p v-if="trash">可恢复至原分类</p></div>
+          <div class="toolbar"><button class="button secondary compact-button" :disabled="!filtered.length||rowsLoading" @click="exportRows"><Download :size="14"/>导出筛选结果</button><button v-if="!trash" class="button primary compact-button" @click="emit('edit',selectedCollection,undefined,selectedCollection==='prices' && productFilter?{productId:productFilter}:undefined)"><Plus :size="15"/>新增</button></div>
         </header>
         <div class="table-filters">
           <label class="search-box"><Search :size="16"/><input v-model="search" aria-label="搜索当前分类" placeholder="搜索名称、日期、备注…"/><button v-if="search" class="icon-button" title="清空搜索" @click="search=''"><X :size="13"/></button></label>
@@ -132,7 +158,7 @@ function auditTitle(item:any){const row=item.after||item.before||{};return row.t
             <td class="actions-cell"><button class="icon-button" title="详情与计算依据" @click="inspecting=row"><Eye :size="15"/></button><template v-if="!trash"><button v-if="['products','prices','purchases'].includes(selectedCollection)" class="icon-button" title="预览历史重算" @click="recalcRow=row"><Calculator :size="15"/></button><button class="icon-button" title="编辑" @click="emit('edit',selectedCollection,row)"><Pencil :size="14"/></button><button class="icon-button" title="移入回收站" :disabled="busy" @click="confirmDelete=[row]"><Trash2 :size="14"/></button></template><button v-else class="icon-button" title="恢复" :disabled="busy" @click="restore(row)"><RotateCcw :size="15"/></button></td>
           </tr></tbody></table>
           <div v-if="rowsLoading" class="empty-state"><p role="status">正在读取记录…</p></div>
-          <div v-else-if="!visible.length" class="empty-state"><Database :size="29"/><strong>{{search?'没有匹配的记录':trash?'回收站是空的':'这里还没有记录'}}</strong><p>{{search?'可以搜索名称、中文选项、日期和备注，多个词用空格隔开。':guide?.summary}}</p><button v-if="search" class="button secondary compact-button" @click="search=''">清空搜索</button><button v-else-if="!trash" class="button secondary compact-button" @click="emit('edit',selectedCollection)"><Plus :size="14"/>新增记录</button></div>
+          <div v-else-if="!visible.length" class="empty-state"><Database :size="23"/><strong>{{search?'没有匹配的记录':trash?'回收站是空的':'这里还没有记录'}}</strong><button v-if="search" class="text-link" @click="search=''">清空搜索</button><button v-else-if="!trash" class="text-link" @click="emit('edit',selectedCollection,undefined,selectedCollection==='prices' && productFilter?{productId:productFilter}:undefined)"><Plus :size="14"/>新增记录</button></div>
         </div>
         <footer class="table-footer"><span class="sensitive">{{filtered.length?`${(page-1)*pageSize+1}–${Math.min(page*pageSize,filtered.length)}`:'0'}} / {{filtered.length}} 条<span v-if="search">（筛选前 {{rows.length}} 条）</span></span><div><label>每页 <select v-model.number="pageSize" aria-label="每页条数"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select></label><button class="icon-button" title="上一页" :disabled="page<=1" @click="page--"><ChevronLeft :size="17"/></button><span>{{page}} / {{pages}}</span><button class="icon-button" title="下一页" :disabled="page>=pages" @click="page++"><ChevronRight :size="17"/></button></div></footer>
       </section>

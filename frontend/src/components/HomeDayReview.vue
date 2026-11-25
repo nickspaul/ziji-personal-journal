@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { adjacentPeriod, anchorInMonth, weekColumn } from '../ledgerReview'
 import { shiftDay } from '../journal'
@@ -33,6 +33,8 @@ const props = defineProps<{
   earliest: string | null
 }>()
 const emit = defineEmits<{ select: [date: string]; month: [date: string] }>()
+const listMode = ref<'day' | 'recent'>('day')
+watch(() => props.selectedDate, () => { listMode.value = 'day' })
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 const monthKey = computed(() => props.selectedDate.slice(0, 7))
 const monthName = computed(() => monthKey.value.slice(0, 4) + ' 年 ' + Number(monthKey.value.slice(5)) + ' 月')
@@ -73,7 +75,9 @@ function neighboringMonth(step: 1 | -1) {
   return next
 }
 function choose(date: string | null) {
-  if (!date || date < minDate.value || date > maxDate.value || date === props.selectedDate) return
+  if (!date || date < minDate.value || date > maxDate.value) return
+  listMode.value = 'day'
+  if (date === props.selectedDate) return
   if (props.scope === 'all' && date.slice(0, 7) !== monthKey.value) emit('month', date)
   else emit('select', date)
 }
@@ -96,7 +100,7 @@ function cellLabel(date: string) {
       <h3 id="day-review-heading"><CalendarDays :size="16"/>按日查看</h3>
       <label>跳到日期<input type="date" aria-label="跳到日期" :value="selectedDate" :min="minDate" :max="maxDate" required @change="chooseInput"></label>
     </header>
-    <div class="day-layout">
+    <div class="day-layout" :class="{weekly: scope === '7'}">
       <div class="calendar-pane">
         <div class="month-nav">
           <strong>{{calendarTitle}}</strong>
@@ -106,17 +110,30 @@ function cellLabel(date: string) {
           </div>
         </div>
         <div class="month-grid" role="group" :aria-label="calendarTitle">
-          <span v-for="day in weekdayLabels" :key="day" class="weekday" aria-hidden="true">{{day}}</span>
+          <template v-if="scope !== '7'"><span v-for="day in weekdays" :key="day" class="weekday" aria-hidden="true">{{day}}</span></template>
           <button v-for="(date, index) in calendar" :key="date" type="button" class="calendar-day"
             :style="scope !== '7' && index === 0 ? {gridColumnStart: weekColumn(date)} : undefined"
             :aria-label="cellLabel(date)" :title="cellLabel(date)" :aria-pressed="date === selectedDate"
             :disabled="date < minDate || date > maxDate" @click="choose(date)">
-            {{dayNumber(date)}}<i v-if="!loading && !error && hasRecords(byDate.get(date))" class="record-dot sensitive" aria-hidden="true"></i>
+            <span v-if="scope === '7'" class="weekday">周{{weekdayLabels[index]}}</span>{{dayNumber(date)}}<i v-if="!loading && !error && hasRecords(byDate.get(date))" class="record-dot sensitive" aria-hidden="true"></i>
           </button>
         </div>
         <p class="calendar-legend"><i></i> 有行为记录</p>
       </div>
       <div class="detail-pane" :aria-busy="loading">
+        <div class="detail-controls">
+          <div class="segmented" role="group" aria-label="查看明细">
+            <button type="button" :aria-pressed="listMode==='day'" :class="{active:listMode==='day'}" @click="listMode='day'">所选日</button>
+            <button type="button" :aria-pressed="listMode==='recent'" :class="{active:listMode==='recent'}" @click="listMode='recent'">近期 5 条</button>
+          </div>
+          <slot name="all"></slot>
+        </div>
+        <template v-if="listMode==='recent'">
+          <p v-if="loading" class="detail-message" role="status">正在读取近期记录…</p>
+          <p v-else-if="error" class="detail-message" role="alert">{{error}}</p>
+          <slot v-else name="recent"></slot>
+        </template>
+        <template v-else>
         <h4><time :datetime="selectedDate">{{Number(selectedDate.slice(5, 7))}} 月 {{Number(selectedDate.slice(8))}} 日</time><span>周{{weekdays[weekColumn(selectedDate) - 1]}}</span></h4>
         <p v-if="loading" class="detail-message" role="status">正在读取当天记录…</p>
         <p v-else-if="error" class="detail-message" role="alert">{{error}}</p>
@@ -141,13 +158,16 @@ function cellLabel(date: string) {
           <slot v-if="hasRecords(selected)"></slot>
           <p v-else class="detail-message">这一天没有行为记录</p>
         </template>
+        </template>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.day-review { min-width: 0; margin-bottom: 16px; }
+.detail-controls { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.detail-controls .segmented button { font-size:12px; padding:5px 8px; }
+.day-review { min-width: 0; }
 .day-heading, .month-nav, .month-nav > div, .day-heading h3, .day-heading label, .detail-pane h4, .calendar-legend { display: flex; align-items: center; }
 .day-heading { justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
 .day-heading h3 { gap: 7px; margin: 0; font-size: 15px; font-weight: 600; }
@@ -156,7 +176,7 @@ function cellLabel(date: string) {
 .day-heading input { width: auto; max-width: 135px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-soft); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
 .day-layout { display: grid; grid-template-columns: minmax(210px, 0.8fr) minmax(0, 1.8fr); }
 .calendar-pane, .detail-pane { min-width: 0; padding: 11px 18px 13px; }
-.calendar-pane { border-right: 1px solid var(--border); }
+.calendar-pane { border-right: 1px solid var(--border); background: color-mix(in srgb,var(--panel-soft) 55%,var(--panel)); }
 .month-nav { justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .month-nav strong, .detail-pane h4 { font-size: 13px; font-weight: 550; }
 .month-nav > div { gap: 3px; }
@@ -164,10 +184,26 @@ function cellLabel(date: string) {
 .month-nav button:hover:enabled { color: var(--text); background: var(--panel-soft); }
 .month-nav button:disabled, .calendar-day:disabled { opacity: .32; cursor: default; }
 .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
-.weekday { text-align: center; color: var(--muted); font-size: 10px; padding-bottom: 3px; }
+.weekday { text-align: center; color: var(--muted); font-size: 11px; padding-bottom: 3px; }
 .calendar-day { position: relative; min-width: 0; min-height: 27px; padding: 2px 1px 6px; border: 1px solid transparent; border-radius: 5px; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1.3; }
 .calendar-day:hover:enabled { background: var(--panel-soft); border-color: var(--border); }
-.calendar-day[aria-pressed=true], .calendar-day[aria-pressed=true]:hover { color: var(--mint); background: var(--mint-bg); border-color: var(--mint); }
+.calendar-day[aria-pressed=true], .calendar-day[aria-pressed=true]:hover { color: var(--on-action); background: var(--action); border-color: var(--action); }
+.calendar-day[aria-pressed=true] :is(.weekday,.record-dot) { color: inherit; }
+.calendar-day[aria-pressed=true] .record-dot { background: currentColor; }
+.weekly { grid-template-columns: minmax(0,1fr); }
+.weekly .calendar-pane { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; border-right: 0; border-bottom: 1px solid var(--border); padding: 8px 16px; }
+.weekly .month-nav, .weekly .calendar-legend { margin: 0; }
+.weekly .month-grid { flex: 1 1 340px; gap: 4px; }
+.weekly .calendar-day { display: inline-flex; align-items: baseline; justify-content: center; gap: 4px; min-height: 34px; padding: 6px 2px; font-size: 14px; font-weight: 600; }
+.weekly .weekday { font-size: 11px; font-weight: 450; padding: 0; }
+.weekly .calendar-legend { font-size: 11px; }
+.weekly .detail-pane { padding-top: 12px; }
+@media(max-width:730px) {
+  .weekly .calendar-pane { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 8px 12px; }
+  .weekly .month-grid { grid-column: 1/-1; grid-row: 2; }
+  .weekly .calendar-day { flex-direction: column; align-items: center; gap: 1px; }
+  .weekly .calendar-legend { justify-self: end; }
+}
 .calendar-legend { gap: 6px; margin: 8px 0 0; font-size: 10px; color: var(--muted); }
 .record-dot, .calendar-legend i { width: 4px; height: 4px; border-radius: 50%; background: var(--mint); }
 .record-dot { position: absolute; bottom: 3px; left: calc(50% - 2px); }

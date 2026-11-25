@@ -51,6 +51,7 @@ public class DataValidator {
             if(category.codePointCount(0,category.length())>40||category.chars().anyMatch(Character::isISOControl))
                 throw new IllegalArgumentException("收支分类最多40字，不能包含换行或控制字符");
         }
+        if(collection.equals("ledger")) validateDebt(m);
         if(collection.equals("ledger") && ((m.get("tripId")==null)!=(m.get("reimbursement")==null)
                 || (m.get("tripId")!=null && !"EXPENSE".equals(m.get("direction")))))
             throw new IllegalArgumentException("只有支出可以关联行程，请同时选择行程和报销状态，或同时清空");
@@ -65,6 +66,28 @@ public class DataValidator {
         }
         validateRanges(collection,m,!imported&&(previous==null||!Boolean.TRUE.equals(previous.get("priceConfirmed"))));
         return m;
+    }
+    private void validateDebt(Map<String,Object> row) {
+        Object kind = row.get("debtKind");
+        String platform = (String)row.get("debtPlatform");
+        BigDecimal fee = (BigDecimal)row.get("debtFee");
+        if (kind == null) {
+            if (platform != null || fee != null) throw new IllegalArgumentException("普通收支请清空负债平台和还款费用");
+            return;
+        }
+        if (!"EXPENSE".equals(row.get("direction"))) throw new IllegalArgumentException("收入不能记作信用消费或还款");
+        if (platform == null || platform.isBlank() || platform.codePointCount(0, platform.length()) > 40
+                || platform.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("请选择或填写负债平台，名称最多40字");
+        if (LocalDate.parse((String)row.get("date")).isAfter(LocalDate.now(ZONE)))
+            throw new IllegalArgumentException("负债流水请选择今天或更早的实际日期");
+        if (row.get("tripId") != null && !"CREDIT".equals(kind))
+            throw new IllegalArgumentException("还款与期初欠款不能计进行程花费，请先核对这笔流水的行程归属");
+        if (fee == null) return;
+        if (!"REPAYMENT".equals(kind)) throw new IllegalArgumentException("仅还款可以填写此次利息和手续费");
+        if (fee.signum() < 0 || fee.compareTo((BigDecimal)row.get("amount")) > 0 || fee.stripTrailingZeros().scale() > 2)
+            throw new IllegalArgumentException("利息和手续费应在零与本次还款总额之间，最多精确到分");
+        if (fee.signum() == 0) row.put("debtFee", null);
     }
     public boolean isDerived(String key) {
         return Set.of("snapshotName","snapshotUnitCount","snapshotUnitPrice","snapshotPriceType","snapshotPriceSourceId","snapshotPriceEffectiveDate","snapshotPriceCurrency","snapshotPurchasePayer","snapshotTarMg","snapshotNicotineMg","snapshotCoMg","snapshotConstituentMethod","snapshotPackagingVersion","snapshotSourceUrl","snapshotSourceDate","snapshotBottleMl","snapshotAbv","cost","costType","actualMl","ethanolGrams","ethanolEquivalent42Ml","tarTotalMg","nicotineTotalMg","coTotalMg","calculationVersion","equivalentBottles","constituentNotice").contains(key);

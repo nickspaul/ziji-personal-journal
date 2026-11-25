@@ -35,7 +35,7 @@ public class QuickJournalController {
     public List<String> expenseCategories() {
         return jdbc.queryForList("""
                 SELECT category COLLATE utf8mb4_bin AS name FROM zj_ledger
-                WHERE deleted=FALSE AND direction='EXPENSE'
+                WHERE deleted=FALSE AND direction='EXPENSE' AND (debtKind IS NULL OR debtKind='CREDIT')
                 GROUP BY name ORDER BY MAX(date) DESC, name
                 """, String.class);
     }
@@ -63,6 +63,9 @@ public class QuickJournalController {
         if (drafts.ledger() != null) {
             if (!"EXPENSE".equals(drafts.ledger().get("direction")))
                 throw new IllegalArgumentException("请选择本人实际支付的支出");
+            Object debtKind = drafts.ledger().get("debtKind");
+            if (debtKind != null && !"CREDIT".equals(debtKind))
+                throw new IllegalArgumentException("还款或期初欠款请在账本中核对后保存");
             result.put("ledger", create("ledger", ledgerId, drafts.ledger()));
         }
         return result;

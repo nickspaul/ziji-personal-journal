@@ -26,6 +26,17 @@ class PeriodReportServiceTest {
         verifyNoMoreInteractions(queries,repository);
     }
 
+    @Test void repaymentPrincipalIsSeparateFromExpenseInExports() {
+        var credit = Map.<String,Object>of("debtKind","CREDIT","direction","EXPENSE","amount",new BigDecimal("100.00"));
+        var payment = Map.<String,Object>of("debtKind","REPAYMENT","direction","EXPENSE","amount",new BigDecimal("52.00"),"debtFee",new BigDecimal("2.00"));
+        when(queries.range("ledger",from,to)).thenReturn(List.of(credit,payment));
+        var section=service.report(from,to,"ledger").sections().get(0);
+        assertEquals(new BigDecimal("102.00"),section.summary().get("支出（元）"));
+        assertEquals(new BigDecimal("52.00"),section.summary().get("现金流出（元）"));
+        assertEquals(new BigDecimal("50.00"),section.summary().get("期间欠款本金净变动（元）"));
+        assertEquals(new BigDecimal("-50.00"),section.records().get(1).get("欠款本金变动（元）"));
+    }
+
     @Test void tasksWithJournalClipAndDeduplicateIntervalsWithoutCountingCrossBoundaryManualMinutes() {
         var workA=Map.<String,Object>of("startDate","2026-09-30","endDate","2026-10-01","startTime","23:00","endTime","01:00","timeMode","EXACT","taskId","t");
         var workB=Map.<String,Object>of("startDate","2026-10-01","startTime","00:15","endTime","01:15","timeMode","EXACT","taskId","t");

@@ -1,7 +1,7 @@
 export type Row = {id:string;version:number;createdAt?:string;updatedAt?:string;deleted?:boolean;[key:string]:any}
 export type Field = {key:string;label:string;type:string;required?:boolean;options?:{value:string;label:string}[]}
 export type CollectionSchema = {name:string;label:string;fields:Field[]}
-export type Bootstrap = {collections:Record<string,Row[]>;settings:Record<string,any>;schema:CollectionSchema[];health:Row[]}
+export type Bootstrap = {collections:Record<string,Row[]>;settings:Record<string,any>;schema:CollectionSchema[]}
 export type TrendPoint = {date:string;smokingCount:number;ethanolEquivalent42Ml:number|null;intimacyCount:number}
 export type Analytics = {daily?:any[];trend?:{unit:'day'|'month'|'year';points:TrendPoint[]};totals?:Record<string,any>;alcohol?:Record<string,any>;links?:Record<string,any>|any[];warnings?:any[];[key:string]:any}
 export const privateActivityLabels = { MASTURBATION: '自慰', SEX: '性生活' } as const

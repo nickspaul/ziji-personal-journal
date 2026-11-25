@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed,onMounted,onBeforeUnmount,ref,watch,nextTick} from 'vue'
-import {LayoutDashboard,Clock3,BarChart3,Package,Wallet,Database,Settings as SettingsIcon,ShieldCheck,Eye,EyeOff,Plus,RefreshCw,Menu,X,Activity,LockKeyhole,LoaderCircle,Check,Info,CalendarDays,ArrowRight,BookOpen,Download,ChevronDown} from 'lucide-vue-next'
+import {LayoutDashboard,BarChart3,Wallet,Database,Settings as SettingsIcon,ShieldCheck,Eye,EyeOff,Plus,RefreshCw,Menu,X,Activity,LockKeyhole,LoaderCircle,Check,Info,CalendarDays,ArrowRight,BookOpen,Download,ChevronDown} from 'lucide-vue-next'
 import Dashboard from './components/Dashboard.vue'
 import Ledger from './components/Ledger.vue'
 import ReportExport from './components/ReportExport.vue'
@@ -10,13 +10,13 @@ import TaskEditor from './components/TaskEditor.vue'
 import BodyDashboard from './components/BodyDashboard.vue'
 import BodyEditor from './components/BodyEditor.vue'
 import DataManager from './components/DataManager.vue'
-import Products from './components/Products.vue'
 import Settings from './components/Settings.vue'
 import Analytics from './components/Analytics.vue'
 import RecordDrawer from './components/RecordDrawer.vue'
 import GenericEditor from './components/GenericEditor.vue'
 import {state,authStatus,authenticate,api,refresh,refreshAnalytics,refreshLifetimeSummary,saveRow,deleteRow,restoreRow,saveSettings} from './api'
 import type {Row,PrivateActivityType} from './types'
+import {dataGroups} from './dataManagement'
 import {clearDrafts} from './drafts'
 import {localNow,shanghaiDate,shortDate,privateActivityLabels} from './types'
 import {shiftDay} from './journal'
@@ -24,26 +24,65 @@ import {anchorInMonth} from './ledgerReview'
 const navGroups = [
   {label:'日常', items:[
     {id:'dashboard', label:'日常概览', icon:LayoutDashboard},
-    {id:'journal', label:'生活日志', icon:BookOpen},
+    {id:'journal', label:'日志与待办', icon:BookOpen},
     {id:'ledger', label:'日常记账', icon:Wallet},
-    {id:'history', label:'行为记录', icon:Clock3},
-    {id:'analytics', label:'统计分析', icon:BarChart3},
+  ]},
+  {label:'回顾', items:[
+    {id:'analytics', label:'行为分析', icon:BarChart3},
     {id:'body', label:'身体数据', icon:Activity},
   ]},
   {label:'管理', items:[
-    {id:'products', label:'种类与单价', icon:Package},
     {id:'manager', label:'数据管理', icon:Database},
     {id:'settings', label:'个人设置', icon:SettingsIcon},
   ]},
 ]
 const nav = navGroups.flatMap(group => group.items)
-const page=ref(nav.some(n=>n.id===location.hash.slice(1))?location.hash.slice(1):'dashboard'),days=ref(30),to=ref(shanghaiDate()),sidebar=ref(false),password=ref(''),passwordAgain=ref(''),showPassword=ref(false),authBusy=ref(false),authError=ref(''),connectionError=ref(''),record=ref<{kind:'smoking'|'alcohol'|'intimacy';row?:Row;session?:Row}|null>(null),editor=ref<{collection:string;row?:Row;preset?:Record<string,any>}|null>(null),historyKind=ref('smoking'),productTab=ref('products'),toast=ref<{message:string;undo?:()=>Promise<void>}|null>(null)
+const managerKinds = dataGroups.flatMap(group => group.collections)
+function readRoute(hash:string) {
+  const [path, query=''] = hash.replace(/^#/, '').split('?')
+  const [section, detail=''] = path.split('/')
+  if (section === 'history' || section === 'products') return {page:'manager', detail:section === 'history' ? 'smoking' : 'products', product:''}
+  const page = nav.some(item => item.id === section) ? section : 'dashboard'
+  const subpage = page === 'manager' ? (managerKinds.includes(detail) ? detail : 'smoking') :
+    page === 'analytics' && ['association','estimate','cost','alcohol'].includes(detail) ? detail : ''
+  return {page, detail:subpage, product:page === 'manager' && subpage === 'prices' ? new URLSearchParams(query).get('product') || '' : ''}
+}
+const initialRoute = readRoute(location.hash)
+const managerCollection = ref(initialRoute.page === 'manager' ? initialRoute.detail : 'smoking')
+const managerProduct = ref(initialRoute.product)
+const page=ref(initialRoute.page),days=ref(30),to=ref(shanghaiDate()),sidebar=ref(false),password=ref(''),passwordAgain=ref(''),showPassword=ref(false),authBusy=ref(false),authError=ref(''),connectionError=ref(''),record=ref<{kind:'smoking'|'alcohol'|'intimacy';row?:Row;session?:Row}|null>(null),editor=ref<{collection:string;row?:Row;preset?:Record<string,any>}|null>(null),toast=ref<{message:string;undo?:()=>Promise<void>}|null>(null)
 const journalRefresh=ref(0)
+const ledgerEdit=ref<{row?:Row;token:number}>()
+let ledgerEditToken=0
 const exportMode = ref<'quick'|'custom'|null>(null)
-watch(() => state.authenticated, authenticated => { if (!authenticated) exportMode.value = null })
+const narrowScreen = window.matchMedia('(max-width: 800px)')
+const isNarrow = ref(narrowScreen.matches)
+const navPanel = ref<HTMLElement>()
+const navTrigger = ref<HTMLButtonElement>()
+function syncViewport() {
+  isNarrow.value = narrowScreen.matches
+  if (!isNarrow.value) sidebar.value = false
+}
+function navKeys(event: KeyboardEvent) {
+  if (!sidebar.value || !navPanel.value) return
+  if (event.key === 'Escape') { sidebar.value = false; return }
+  if (event.key !== 'Tab') return
+  const items = [...navPanel.value.querySelectorAll<HTMLElement>('a[href],button:not(:disabled)')].filter(el => el.offsetWidth > 0)
+  const first = items[0], last = items[items.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+}
+watch(sidebar, async open => {
+  await nextTick()
+  if (open) navPanel.value?.querySelector<HTMLElement>('[aria-current="page"]')?.focus()
+  else if (isNarrow.value) navTrigger.value?.focus({preventScroll:true})
+})
+onMounted(() => { narrowScreen.addEventListener('change', syncViewport); window.addEventListener('keydown', navKeys) })
+onBeforeUnmount(() => { narrowScreen.removeEventListener('change', syncViewport); window.removeEventListener('keydown', navKeys) })
+watch(() => state.authenticated, authenticated => { if (!authenticated) { exportMode.value = null; sidebar.value = false } })
 const bodyDelete=ref<Row|null>(null),bodyDeleteBusy=ref(false),bodyDeleteError=ref('')
 async function removeBody(){if(!bodyDelete.value)return;const row=bodyDelete.value;bodyDeleteBusy.value=true;bodyDeleteError.value='';try{await deleteRow('body',row);bodyDelete.value=null;await reload();notify('身体测量已移入回收站。',async()=>{await restoreRow('body',{...row,version:row.version+1});await reload();notify('身体测量已恢复。')})}catch(e){bodyDeleteError.value=(e as Error).message}finally{bodyDeleteBusy.value=false}}
-function repairAlcohol(detail:Record<string,any>){if(detail.collection==='body'){go('body');openEditor('body',state.collections.body?.find(r=>r.id===detail.id));return}if(detail.collection==='sessions'){const session=state.collections.sessions?.find(r=>r.id===(detail.sessionId||detail.id));if(session){record.value={kind:'alcohol',session};return}}if(detail.collection==='drinks'){const row=state.collections.drinks?.find(r=>r.id===detail.id);if(row){openEditor('drinks',row);return}}historyKind.value=detail.collection==='sessions'?'sessions':'drinks';go('history')}
+function repairAlcohol(detail:Record<string,any>){if(detail.collection==='body'){go('body');openEditor('body',state.collections.body?.find(r=>r.id===detail.id));return}if(detail.collection==='sessions'){const session=state.collections.sessions?.find(r=>r.id===(detail.sessionId||detail.id));if(session){record.value={kind:'alcohol',session};return}}if(detail.collection==='drinks'){const row=state.collections.drinks?.find(r=>r.id===detail.id);if(row){openEditor('drinks',row);return}}go('manager/'+(detail.collection==='sessions'?'sessions':'drinks'))}
 type HomeScope = '7' | '30' | 'all'
 const homeScope = ref<HomeScope>('7')
 const selectedDay = ref(to.value)
@@ -74,24 +113,45 @@ function selectHomeDay(date: string) {
 const currentNav=computed(()=>nav.find(n=>n.id===page.value)||nav[0]),todayLabel=computed(()=>new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'}).format(new Date()))
 let toastTimer:ReturnType<typeof setTimeout>|undefined,lockTimer:ReturnType<typeof setInterval>|undefined,lastActivity=Date.now()
 function notify(message:string,undo?:()=>Promise<void>){if(toastTimer)clearTimeout(toastTimer);toast.value={message,undo};toastTimer=setTimeout(()=>toast.value=null,undo?10000:6000)}
-function go(id:string){
-  if(page.value==='dashboard' && id==='analytics'){
-    detailMonth.value=reviewMonth.value
-    days.value=homeScope.value==='all' ? 0 : Number(homeScope.value)
+function applyRoute(id:string, scroll:boolean) {
+  const route = readRoute(id)
+  if (route.page !== 'ledger') ledgerEdit.value=undefined
+  if (page.value === 'dashboard' && route.page === 'analytics') {
+    detailMonth.value = reviewMonth.value
+    days.value = homeScope.value === 'all' ? 0 : Number(homeScope.value)
   }
-  page.value=id;location.hash=id;sidebar.value=false;window.scrollTo({top:0,behavior:state.settings.reducedMotion?'instant':'smooth'})
+  page.value = route.page
+  if (route.page === 'manager') {
+    managerCollection.value = route.detail
+    managerProduct.value = route.product
+  }
+  sidebar.value = false
+  if (scroll) void nextTick(() => {
+    const behavior = state.settings.reducedMotion ? 'instant' : 'smooth'
+    const target = route.page === 'analytics' && route.detail ? document.getElementById(route.detail) : null
+    if (target) target.scrollIntoView({behavior, block:'start'})
+    else window.scrollTo({top:0, behavior})
+  })
+}
+function go(id:string) {
+  if (id === 'manager') id = 'manager/' + managerCollection.value + (managerProduct.value ? '?product=' + encodeURIComponent(managerProduct.value) : '')
+  if (location.hash !== '#' + id) window.history.pushState(null,'','#'+id)
+  applyRoute(id,true)
+}
+function openCollection(name:string, product='') {
+  go('manager/' + name + (product ? '?product=' + encodeURIComponent(product) : ''))
 }
 function openRecord(kind:'smoking'|'alcohol'|'intimacy'){record.value={kind}}
-function openEditor(collection:string,row?:Row,preset?:Record<string,any>){if(!row&&['smoking','drinks','intimacy'].includes(collection)){openRecord(collection==='smoking'?'smoking':collection==='intimacy'?'intimacy':'alcohol');return}editor.value={collection,row,preset}}
+function openEditor(collection:string,row?:Row,preset?:Record<string,any>){if(collection==='ledger'){ledgerEdit.value={row,token:++ledgerEditToken};go('ledger');return}if(!row&&['smoking','drinks','intimacy'].includes(collection)){openRecord(collection==='smoking'?'smoking':collection==='intimacy'?'intimacy':'alcohol');return}editor.value={collection,row,preset}}
 async function updateAnalytics(includeSummary = true){
-  if (!state.authenticated || !['dashboard','analytics','manager','history'].includes(page.value)) return
+  if (!state.authenticated || !['dashboard','analytics','manager'].includes(page.value)) return
   const needsSummary = includeSummary && page.value === 'dashboard' && homeScope.value === 'all'
   await Promise.all([refreshAnalytics(from.value,analysisEnd.value), ...(needsSummary ? [refreshLifetimeSummary()] : [])])
 }
 async function reload(){try{await refresh();journalRefresh.value++;await updateAnalytics()}catch(e){notify((e as Error).message)}}
-async function init(){state.checking=true;connectionError.value='';try{await authStatus();if(state.authenticated){await refresh();await updateAnalytics()}}catch(e){connectionError.value=(e as Error).message}finally{state.checking=false}}
-async function login(){authError.value='';if(!state.configured&&password.value!==passwordAgain.value){authError.value='两次输入的口令不一致，请再检查一下。';return}authBusy.value=true;try{await authenticate(password.value);password.value='';passwordAgain.value='';await updateAnalytics();lastActivity=Date.now()}catch(e){authError.value=(e as Error).message}finally{authBusy.value=false}}
-async function lock(){try{await api('/auth/logout',{method:'POST'});state.authenticated=false;state.collections={};state.analytics={};state.lifetimeSummary={};state.lifetimeError='';record.value=null;editor.value=null;bodyDelete.value=null;await nextTick();clearDrafts();await authStatus()}catch(e){notify((e as Error).message)}}
+async function init(){state.checking=true;connectionError.value='';try{await authStatus();if(state.authenticated){await refresh();await updateAnalytics()}}catch(e){connectionError.value=(e as Error).message}finally{state.checking=false;if(state.authenticated && readRoute(location.hash).detail)applyRoute(location.hash,true)}}
+async function login(){authError.value='';if(!state.configured&&password.value!==passwordAgain.value){authError.value='两次输入的口令不一致，请再检查一下。';return}authBusy.value=true;try{await authenticate(password.value);password.value='';passwordAgain.value='';await updateAnalytics();if(readRoute(location.hash).detail)applyRoute(location.hash,true);lastActivity=Date.now()}catch(e){authError.value=(e as Error).message}finally{authBusy.value=false}}
+async function lock(){try{await api('/auth/logout',{method:'POST'});state.authenticated=false;state.collections={};state.analytics={};state.lifetimeSummary={};state.lifetimeError='';ledgerEdit.value=undefined;record.value=null;editor.value=null;bodyDelete.value=null;await nextTick();clearDrafts();await authStatus()}catch(e){notify((e as Error).message)}}
 function reminder(kind:string){if(!['smoking','sessions','drinks','intimacy'].includes(kind))return '';if(state.settings.reminderMode==='OFF')return '';const time=localNow().slice(11,16),start=state.settings.quietStart||'23:00',end=state.settings.quietEnd||'08:00';if(start<end?time>=start&&time<end:time>=start||time<end)return '';const key=`ziji-reminders-${shanghaiDate()}`;const count=Number(localStorage.getItem(key)||0),limit=Number(state.settings.dailyReminderLimit??3);if(count>=limit)return '';localStorage.setItem(key,String(count+1));return kind==='smoking'?'如果愿意，下次想抽时可以先等一会儿。':kind==='intimacy'?'也给舒适和休息留一点空间。':kind==='sessions'||kind==='drinks'?'可以考虑到这里结束，给今晚留一些休息时间。':''}
 const quickSaving = ref(false)
 async function quick(activityType: PrivateActivityType) {
@@ -112,7 +172,7 @@ async function afterSaved(row:Row,collection:string){const wasNew=!record.value?
 async function togglePrivacy(){try{await saveSettings({hidden:!state.settings.hidden})}catch(e){notify((e as Error).message)}}
 function editFromDashboard(row:Row,collection:string){if(collection==='smoking'||collection==='intimacy')record.value={kind:collection,row};else openEditor(collection,row)}
 function activity(){lastActivity=Date.now()}
-function hashChange(){const id=location.hash.slice(1);if(nav.some(n=>n.id===id))page.value=id}
+function hashChange(){applyRoute(location.hash,true)}
 watch(to, (today, previous) => {
   if (selectedDay.value === previous || (homeScope.value !== 'all' && selectedDay.value < shiftDay(today, 1 - Number(homeScope.value)))) selectedDay.value = today
 })
@@ -130,48 +190,76 @@ onMounted(()=>{init();window.addEventListener('pointerdown',activity);window.add
 onBeforeUnmount(()=>{window.removeEventListener('pointerdown',activity);window.removeEventListener('keydown',activity);window.removeEventListener('hashchange',hashChange);if(lockTimer)clearInterval(lockTimer);if(toastTimer)clearTimeout(toastTimer)})
 </script>
 <template>
-<div v-if="state.checking" class="loading-screen"><div class="brand-mark"><Activity :size="28"/></div><LoaderCircle class="spin" :size="23"/><p>正在连接你的本机空间…</p></div>
-<div v-else-if="!state.authenticated||connectionError" class="auth-page"><section class="auth-story"><a class="brand" href="#"><span class="brand-mark"><Activity :size="25" :stroke-width="1.8"/></span><span>自记<small>ZIJI / PERSONAL JOURNAL</small></span></a><div class="auth-story-copy"><span class="eyebrow">A SPACE THAT'S ONLY YOURS</span><h1>认真记录。<br/><span>温柔对待自己。</span></h1><p>看见日常的节奏，了解每一次选择。<br/>不必完美，从如实记下开始。</p></div><div class="auth-orbits" aria-hidden="true"><div></div><div></div><div></div><span><Activity :size="46" :stroke-width="1.1"/></span></div><div class="auth-privacy"><ShieldCheck :size="18"/><span>本机运行 · 私人数据留在这台电脑</span></div></section><section class="auth-form-wrap"><div class="auth-form-box"><span class="icon-tile mint"><LockKeyhole :size="24"/></span><span class="eyebrow">YOUR PRIVATE JOURNAL</span><h2>{{state.configured?'欢迎回到自己的空间':'创建你的私人空间'}}</h2><p>{{state.configured?'输入本地口令，继续记录日常。':'设置一个本地解锁口令，保护这些只属于你的记录。'}}</p><div v-if="connectionError" class="connection-state"><Info :size="23"/><p>{{connectionError}}</p><button class="button primary full-width" @click="init"><RefreshCw :size="17"/>重新连接本机服务</button></div><form v-else @submit.prevent="login"><label class="field"><span>{{state.configured?'解锁口令':'设置口令'}}</span><div class="password-input"><input v-model="password" :type="showPassword?'text':'password'" :minlength="state.configured?1:8" required :autocomplete="state.configured?'current-password':'new-password'" :placeholder="state.configured?'输入你的本地口令':'至少 8 位，可使用短语'" autofocus/><button type="button" class="icon-button" :title="showPassword?'隐藏口令':'显示口令'" @click="showPassword=!showPassword"><EyeOff v-if="showPassword" :size="18"/><Eye v-else :size="18"/></button></div></label><label v-if="!state.configured" class="field"><span>再次输入口令</span><input v-model="passwordAgain" :type="showPassword?'text':'password'" minlength="8" required autocomplete="new-password" placeholder="确认两次输入一致"/></label><p v-if="authError" class="error-box" role="alert">{{authError}}</p><button class="button primary full-width auth-submit" :disabled="authBusy"><LoaderCircle v-if="authBusy" class="spin" :size="18"/><span>{{authBusy?'正在打开':state.configured?'解锁我的空间':'开始记录'}}</span><ArrowRight :size="18"/></button></form><div class="auth-footnote"><ShieldCheck :size="15"/><span>无需注册云端账号 · 15 分钟无操作自动锁定</span></div></div><footer>自记 <span>为自己留一份真实的日常</span></footer></section></div>
+<div v-if="state.checking" class="loading-screen" role="status">
+  <span class="journal-mark" aria-hidden="true"></span><LoaderCircle class="spin" :size="19"/>正在打开本机空间…
+</div>
+<main v-else-if="!state.authenticated || connectionError" class="auth-page">
+  <div class="auth-book">
+    <div class="book-cover"><span class="journal-mark" aria-hidden="true"></span><strong>自记</strong><time :datetime="to">{{todayLabel}}</time></div>
+    <section class="unlock-panel" :aria-label="state.configured?'解锁自记':'设置本地口令'">
+      <h1>{{state.configured?'解锁你的手记':'设置本地口令'}}</h1>
+      <p>{{state.configured?'输入口令，打开这台电脑上的记录。':'用至少 8 位字符设置口令，保护这台电脑上的记录。'}}</p>
+      <div v-if="connectionError" class="connection-state">
+        <p role="alert"><Info :size="16"/> {{connectionError}}</p>
+        <button class="button secondary" @click="init"><RefreshCw :size="16"/>重新连接本机服务</button>
+      </div>
+      <form v-else @submit.prevent="login">
+        <label class="field"><span>本地口令</span>
+          <span class="unlock-password"><input v-model="password" :type="showPassword?'text':'password'" :minlength="state.configured?1:8" required :autocomplete="state.configured?'current-password':'new-password'" autofocus/><button type="button" class="icon-button" :aria-label="showPassword?'隐藏口令':'显示口令'" :title="showPassword?'隐藏口令':'显示口令'" @click="showPassword=!showPassword"><EyeOff v-if="showPassword" :size="16"/><Eye v-else :size="16"/></button></span>
+        </label>
+        <label v-if="!state.configured" class="field"><span>再次输入口令</span><input v-model="passwordAgain" :type="showPassword?'text':'password'" minlength="8" required autocomplete="new-password"/></label>
+        <p v-if="authError" class="error-box" role="alert">{{authError}}</p>
+        <button class="button primary full-width unlock-submit" :disabled="authBusy"><LoaderCircle v-if="authBusy" class="spin" :size="16"/>{{authBusy?'正在打开':state.configured?'解锁':'开始记录'}}<ArrowRight :size="16"/></button>
+      </form>
+      <p class="unlock-note"><ShieldCheck :size="15"/>本机存储 · 15 分钟无操作后自动锁定</p>
+    </section>
+  </div>
+</main>
 <div v-else class="app-shell" :class="{privacy:state.settings.hidden}">
-  <div v-if="sidebar" class="mobile-scrim" @click="sidebar=false"></div>
-  <aside class="sidebar" :class="{open:sidebar}" @keydown.esc="sidebar=false">
-    <a class="brand" href="#dashboard" @click.prevent="go('dashboard')"><span class="brand-mark"><Activity :size="25" :stroke-width="1.8"/></span><span>自记</span></a>
-    <nav v-for="group in navGroups" :key="group.label" class="shell-nav" :aria-label="group.label">
-      <div class="nav-label">{{group.label}}</div>
-      <button v-for="n in group.items" :key="n.id" :class="{active:page===n.id}" :aria-current="page===n.id?'page':undefined" @click="go(n.id)">
-        <component :is="n.icon" :size="18" :stroke-width="1.7"/><span>{{n.label}}</span>
-      </button>
-    </nav>
-    <div class="shell-local"><ShieldCheck :size="15"/>本机存储</div>
+  <div v-if="sidebar" class="nav-scrim" @click="sidebar=false"></div>
+  <aside id="workspace-nav" ref="navPanel" class="workspace-nav" :class="{open:sidebar}" :inert="isNarrow && !sidebar" :role="sidebar?'dialog':undefined" :aria-modal="sidebar || undefined" aria-label="工作区导航">
+    <div class="nav-brand-row">
+      <a class="workspace-brand" href="#dashboard" aria-label="自记 · 日常概览" @click.prevent="go('dashboard')"><span class="journal-mark" aria-hidden="true"></span>自记</a>
+      <button class="icon-button nav-dismiss" title="关闭导航" @click="sidebar=false"><X :size="18"/></button>
+    </div>
+    <div class="nav-lists">
+      <nav v-for="group in navGroups" :key="group.label" class="shell-nav" :aria-label="group.label">
+        <div class="nav-group-title">{{group.label}}</div>
+        <a v-for="n in group.items" :key="n.id" :href="'#'+n.id" :aria-current="page===n.id?'page':undefined" @click.exact.prevent="go(n.id)">
+          <component :is="n.icon" :size="17" :stroke-width="1.7"/><span>{{n.label}}</span>
+        </a>
+      </nav>
+    </div>
+    <div class="workspace-status">
+      <span><ShieldCheck :size="16"/>本机存储</span>
+      <button class="icon-button" title="刷新数据" @click="reload" :disabled="state.loading"><RefreshCw :size="15" :class="{spin:state.loading}"/></button>
+      <button class="icon-button" title="锁定空间" @click="sidebar=false;lock()"><LockKeyhole :size="15"/></button>
+    </div>
   </aside>
-  <main class="main"><div class="main-content">
+  <main class="workspace-main" :inert="sidebar"><div class="workspace-content">
     <header class="shell-header">
       <div class="shell-title">
-        <button class="icon-button mobile-menu" aria-label="打开导航" :aria-expanded="sidebar" @click="sidebar=true"><Menu :size="21"/></button>
-        <div><h1>{{currentNav.label}}</h1><p v-if="page==='dashboard'">{{todayLabel}}</p></div>
+        <button ref="navTrigger" class="icon-button nav-trigger" aria-label="打开导航" aria-controls="workspace-nav" :aria-expanded="sidebar" @click="sidebar=true"><Menu :size="20"/></button>
+        <h1>{{currentNav.label}}</h1><span v-if="page==='dashboard'" class="shell-date">{{todayLabel}}</span>
       </div>
       <div class="shell-actions">
+        <label v-if="page==='analytics'" class="date-control"><CalendarDays :size="15"/><select v-model.number="days" aria-label="统计时间范围"><option v-if="detailMonth" :value="0">{{detailMonth}} 月度</option><option :value="7">最近 7 天</option><option :value="30">最近 30 天</option><option :value="90">最近 90 天</option></select></label>
+        <button v-if="page==='body'" class="button primary compact-button" @click="openEditor('body')"><Plus :size="15"/>记录测量</button>
         <div class="report-split" role="group" aria-label="导出分析记录">
-          <button type="button" title="下载最近 30 天的 Markdown，默认不含私人记录" @click="exportMode='quick'"><Download :size="15"/>导出近 30 天</button>
-          <button type="button" title="选择导出日期、内容和格式" aria-label="选择导出日期、内容和格式" aria-haspopup="dialog" @click="exportMode='custom'"><ChevronDown :size="15"/></button>
+          <button type="button" title="下载最近 30 天的 Markdown，默认不含私人记录" aria-label="导出近 30 天" @click="exportMode='quick'"><Download :size="15"/><span>导出近 30 天</span></button>
+          <button type="button" title="选择导出日期、内容和格式" aria-label="选择导出日期、内容和格式" aria-haspopup="dialog" @click="exportMode='custom'"><ChevronDown :size="14"/></button>
         </div>
-        <label v-if="page==='analytics'" class="date-control"><CalendarDays :size="16"/><select v-model.number="days" aria-label="统计时间范围"><option v-if="detailMonth" :value="0">{{detailMonth}} 月度</option><option :value="7">最近 7 天</option><option :value="30">最近 30 天</option><option :value="90">最近 90 天</option></select></label>
-        <button v-if="page==='body'" class="button primary compact-button" @click="openEditor('body')"><Plus :size="16"/>记录测量</button>
-        <button class="icon-button" :aria-pressed="!!state.settings.hidden" :title="state.settings.hidden?'显示记录':'隐私遮挡'" @click="togglePrivacy"><EyeOff v-if="state.settings.hidden" :size="18"/><Eye v-else :size="18"/></button>
-        <button class="icon-button" title="刷新数据" @click="reload" :disabled="state.loading"><RefreshCw :size="17" :class="{spin:state.loading}"/></button>
-        <button class="icon-button" title="锁定空间" @click="lock"><LockKeyhole :size="17"/></button>
+        <button class="icon-button privacy-switch" :aria-pressed="!!state.settings.hidden" :title="state.settings.hidden?'显示记录':'隐私遮挡'" @click="togglePrivacy"><EyeOff v-if="state.settings.hidden" :size="18"/><Eye v-else :size="18"/></button>
       </div>
     </header>
 <div v-if="state.error" class="error-box main-error" role="alert">{{state.error}}<button class="text-link" @click="reload">重试</button></div>
 <Dashboard v-if="page==='dashboard'" :from="from" :to="analysisEnd" :days="activeDays" :scope="homeScope" :selected-date="selectedDay" :loading="homeLoading" :quick-saving="quickSaving" @scope="changeHomeScope" @select-day="selectHomeDay" @month="selectHomeDay" @record="openRecord" @quick="quick" @view="go" @edit="editFromDashboard" @repair="repairAlcohol"/>
-<Ledger v-else-if="page==='ledger'" :refresh-key="journalRefresh" @notify="notify"/>
+<Ledger v-else-if="page==='ledger'" :refresh-key="journalRefresh" :edit-request="ledgerEdit" @notify="notify"/>
 <LifeJournal v-else-if="page==='journal'" :refresh-key="journalRefresh"/>
-<template v-else-if="page==='history'"><div class="history-tabs segmented"><button v-for="t in [{v:'smoking',l:'吸烟记录'},{v:'sessions',l:'饮酒场次'},{v:'drinks',l:'酒品明细'},{v:'intimacy',l:'私人记录'}]" :key="t.v" :class="{active:historyKind===t.v}" @click="historyKind=t.v">{{t.l}}</button></div><DataManager :key="historyKind" :collection="historyKind" @edit="openEditor" @changed="updateAnalytics" @notify="notify"/></template>
 <Analytics v-else-if="page==='analytics'" :from="from" :to="analysisEnd" @view="go" @repair="repairAlcohol"/>
 <BodyDashboard v-else-if="page==='body'" @edit="row=>openEditor('body',row)" @remove="row=>{bodyDeleteError='';bodyDelete=row}"/>
-<template v-else-if="page==='products'"><div class="history-tabs segmented"><button :class="{active:productTab==='products'}" @click="productTab='products'">商品资料</button><button :class="{active:productTab==='prices'}" @click="productTab='prices'">价格历史</button></div><Products v-if="productTab==='products'" @edit="openEditor" @changed="updateAnalytics" @notify="notify"/><DataManager v-else collection="prices" @edit="openEditor" @changed="updateAnalytics" @notify="notify"/></template>
-<DataManager v-else-if="page==='manager'" manager :refresh-key="journalRefresh" @edit="openEditor" @changed="updateAnalytics" @notify="notify"/>
-<Settings v-else-if="page==='settings'" @view="go" @edit="openEditor" @changed="updateAnalytics" @notify="notify" @lock="lock"/>
+<DataManager v-else-if="page==='manager'" manager :collection="managerCollection" :product-filter="managerProduct" @choose="openCollection" :refresh-key="journalRefresh" @edit="openEditor" @changed="updateAnalytics" @notify="notify"/>
+<Settings v-else-if="page==='settings'" @changed="updateAnalytics" @notify="notify"/>
 </div></main>
 <ReportExport v-if="exportMode" :quick="exportMode==='quick'" @close="exportMode=null" @notify="notify"/>
 <RecordDrawer v-if="record" :key="record.kind+(record.row?.id||record.session?.id||'new')" :kind="record.kind" :row="record.row" :session="record.session" @close="record=null" @saved="afterSaved" @refresh="reload"/>
@@ -183,23 +271,4 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',activity);window.r
 </div><Transition name="toast"><div v-if="toast" class="toast" role="status"><span class="toast-icon"><Check :size="17"/></span><p>{{toast.message}}</p><button v-if="toast.undo" class="toast-undo" @click="toast.undo().catch(e=>notify(e.message))">撤销</button><button class="icon-button" title="关闭提示" @click="toast=null"><X :size="16"/></button></div></Transition>
 </template>
 
-<style scoped>
-.sidebar {overflow-y:auto}
-.shell-nav {margin-top:24px}
-.shell-nav .nav-label {margin:0 12px 4px;color:var(--muted)}
-.shell-local {display:flex;align-items:center;gap:8px;margin-top:auto;padding:25px 12px 20px;color:var(--muted);font-size:12px}
-.shell-header {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)}
-.shell-title, .shell-actions {display:flex;align-items:center;gap:6px}
-.shell-title h1 {font-size:clamp(22px,2vw,28px);line-height:1.2;letter-spacing:-.03em}
-.shell-title p {margin-top:6px;color:var(--muted);font-size:12px}
-.shell-actions .icon-button[aria-pressed=true] {color:var(--mint);background:var(--mint-bg)}
-.report-split {display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:8px;background:var(--panel)}
-.report-split button {display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:7px 9px;color:var(--text);border-radius:7px}
-.report-split button+button {border-left:1px solid var(--border);border-radius:0 7px 7px 0;padding-inline:7px}
-.report-split button:hover {background:var(--panel-soft)}
-@media(max-width:600px){
-  .shell-header {gap:4px;margin-bottom:14px;padding-bottom:12px;flex-wrap:wrap}
-  .shell-actions {margin-left:auto;gap:2px}
-  .shell-actions .date-control {padding:4px}
-}
-</style>
+<style src="./shell.css"></style>

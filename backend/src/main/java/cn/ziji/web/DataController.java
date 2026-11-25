@@ -12,7 +12,7 @@ public class DataController {
     private final DataService data;
     private final DataRepository repository;
     public DataController(DataService data,DataRepository repository){this.data=data;this.repository=repository;}
-    @GetMapping("/bootstrap") public Map<String,Object> bootstrap(){Map<String,Object> result=new LinkedHashMap<>();result.put("collections",data.state());result.put("settings",data.settings());result.put("schema",data.schema());result.put("health",data.list("health",false));return result;}
+    @GetMapping("/bootstrap") public Map<String,Object> bootstrap(){Map<String,Object> result=new LinkedHashMap<>();result.put("collections",data.state());result.put("settings",data.settings());result.put("schema",data.schema());return result;}
     @GetMapping("/data/{collection}") public List<Map<String,Object>> list(@PathVariable String collection,@RequestParam(defaultValue="false") boolean deleted){return data.list(collection,deleted);}
     @GetMapping("/data/{collection}/{id}") public Map<String,Object> detail(@PathVariable String collection,@PathVariable String id){return data.require(collection,id);}
     @PostMapping("/data/{collection}") public Map<String,Object> create(@PathVariable String collection,@RequestBody Map<String,Object> input){return data.create(collection,input);}

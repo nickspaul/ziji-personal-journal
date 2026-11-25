@@ -39,7 +39,7 @@ public class LedgerReviewService {
         var trip=active("journal",id);
         String from=trip.get("startDate").toString(),to=Objects.toString(trip.get("endDate"),from);
         var expenses=jdbc.query("""
-                SELECT * FROM zj_ledger WHERE deleted=FALSE AND direction='EXPENSE'
+                SELECT * FROM zj_ledger WHERE deleted=FALSE AND direction='EXPENSE' AND (debtKind IS NULL OR debtKind='CREDIT')
                 AND (tripId=? OR `date` BETWEEN ? AND ?) ORDER BY `date`,createdAt,id
                 """,(rs,n)->repository.mapRow("ledger",rs),id,from,to);
         var logs=jdbc.query("""
@@ -72,7 +72,7 @@ public class LedgerReviewService {
             if(!seen.add(expenseId))throw new IllegalArgumentException("请勿重复选择同一笔流水");
             var expense=active("ledger",expenseId);
             String owner=(String)expense.get("tripId"),date=(String)expense.get("date");
-            if(!"EXPENSE".equals(expense.get("direction")) || owner!=null && !owner.equals(id))
+            if(!DebtAccounting.consumption(expense) || owner!=null && !owner.equals(id))
                 throw new ApiException(409,"这笔流水已变化，或已归入其他行程");
             if(owner==null && (date.compareTo(from)<0 || date.compareTo(to)>0))
                 throw new ApiException(409,"流水已不在行程日期范围内，请重新核对");

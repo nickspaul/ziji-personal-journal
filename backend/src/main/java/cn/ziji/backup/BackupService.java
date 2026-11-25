@@ -73,6 +73,8 @@ public class BackupService {
             data.checkReferences(e.getKey(),row,null,union);
             if(e.getKey().equals("drinks")&&!Boolean.TRUE.equals(row.get("deleted"))&&union.get("sessions").stream().anyMatch(s->Objects.equals(s.get("id"),row.get("sessionId"))&&Boolean.TRUE.equals(s.get("deleted"))))throw new IllegalArgumentException("有效饮酒明细关联了已删除场次");
         }catch(RuntimeException ex){if(errors.size()<50)errors.add(e.getKey()+" "+row.get("id")+"："+ex.getMessage());}
+        try{cn.ziji.ledger.DebtAccounting.validateHistory(union.getOrDefault("ledger",List.of()));}
+        catch(IllegalArgumentException e){errors.add("负债余额："+e.getMessage());}
         try{validateAudit(backup.get("audit"));}catch(RuntimeException e){errors.add("操作历史："+e.getMessage());}
         if(backup.get("settings")!=null&&!(backup.get("settings") instanceof Map<?,?>))errors.add("设置内容应为对象");
         if(backup.get("settings") instanceof Map<?,?> settings) {
@@ -130,6 +132,7 @@ public class BackupService {
     @Transactional(isolation=Isolation.SERIALIZABLE)
     public Map<String,Object> restore(Map<String,Object> backup,String mode) {
         if(!"merge".equals(mode))throw new IllegalArgumentException("仅支持预览后的合并恢复");
+        repository.lockSettings();
         Plan plan=plan(backup);if(!Boolean.TRUE.equals(plan.preview().get("valid")))throw new IllegalArgumentException("备份校验失败："+plan.preview().get("errors"));
         String preBackup=savePreRestore();int inserted=0;
         for(var e:plan.additions().entrySet())for(var row:e.getValue()){repository.insert(e.getKey(),row);repository.audit("IMPORT",e.getKey(),row.get("id").toString(),null,row);inserted++;}

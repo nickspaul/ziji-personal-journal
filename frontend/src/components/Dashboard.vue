@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed,ref,watch } from 'vue'
-import { ArrowUpRight,Plus,Cigarette,Wine,Heart,Wallet,Clock3,ChevronDown,Pencil } from 'lucide-vue-next'
+import { ArrowUpRight,Plus,Cigarette,Wine,Heart,Wallet,Pencil } from 'lucide-vue-next'
 import Chart from './Chart.vue'
-import AlcoholEstimate from './AlcoholEstimate.vue'
-import AssociationSummary from './AssociationSummary.vue'
 import { state } from '../api'
 import HomeDayReview from './HomeDayReview.vue'
 import HomeMomentList, { type HomeMoment } from './HomeMomentList.vue'
@@ -19,9 +17,9 @@ const emit = defineEmits<{
 }>()
 const scopes = [{ value: '7', label: '近 7 天' }, { value: '30', label: '近 30 天' }, { value: 'all', label: '累计' }] as const
 const series = {
-  smoking: {key: 'smokingCount', title: '吸烟', unit: '根', dark: '#a8e6ba', light: '#36734d'},
-  alcohol: {key: 'ethanolEquivalent42Ml', title: '饮酒（42°）', unit: 'ml', dark: '#9aabff', light: '#536bc5'},
-  intimacy: {key: 'intimacyCount', title: '私人', unit: '次', dark: '#e5a7cc', light: '#a15384'}
+  smoking: {key: 'smokingCount', title: '吸烟', unit: '根', dark: '#81d4b2', light: '#27795b'},
+  alcohol: {key: 'ethanolEquivalent42Ml', title: '饮酒（42°）', unit: 'ml', dark: '#a9b8eb', light: '#546ba8'},
+  intimacy: {key: 'intimacyCount', title: '私人', unit: '次', dark: '#d9a8c8', light: '#99577f'}
 } as const
 const chartKind = ref<keyof typeof series>('smoking')
 const analytics = computed(() => state.analytics.from === props.from && state.analytics.to === props.to ? state.analytics : null)
@@ -78,8 +76,8 @@ const trendStatus = computed(() => {
   return trendPoints.value.length ? '' : '趋势暂时无法读取'
 })
 const chartOption = computed(() => {
-  const gridColor = state.settings.theme === 'light' ? '#dce2de' : '#333640'
-  const labelColor = state.settings.theme === 'light' ? '#606e65' : '#98a1ae'
+  const gridColor = state.settings.theme === 'light' ? '#d9ded9' : '#35403d'
+  const labelColor = state.settings.theme === 'light' ? '#53645d' : '#a4b0aa'
   const points = trendPoints.value
   const history = isLifetime.value
   const unit = trendUnit.value
@@ -96,11 +94,14 @@ const chartOption = computed(() => {
     animation: !state.settings.reducedMotion,
     grid: {left: 42, right: history ? 32 : 16, top: 22, bottom: history && unit === 'day' ? 42 : 26},
     tooltip: {
-      trigger: 'axis' as const, valueFormatter: (value: unknown) => value == null ? '资料待补' : `${value} ${chartMetric.value.unit}`
+      trigger: 'axis' as const, confine: true,
+      backgroundColor: state.settings.theme === 'light' ? '#fff' : '#242e2a', borderColor: gridColor,
+      textStyle: {color: labelColor}, axisPointer: {type: 'line' as const, lineStyle: {color: labelColor}},
+      valueFormatter: (value: unknown) => value == null ? '资料待补' : `${value} ${chartMetric.value.unit}`
     },
     xAxis: {
       type: 'category' as const,
-      data: dates, axisLine: {lineStyle: {color: gridColor}}, axisTick: {show: false},
+      data: dates, boundaryGap: false, axisLine: {lineStyle: {color: gridColor}}, axisTick: {show: false},
       axisLabel: {
         color: labelColor, fontSize: 11, hideOverlap: true,
         interval: historyTicks ? (index: number) => historyTicks.has(index) : undefined,
@@ -113,9 +114,9 @@ const chartOption = computed(() => {
       axisLabel: {color: labelColor, fontSize: 11}, splitLine: {lineStyle: {color: gridColor, type: 'dashed' as const}}
     },
     series: [{
-      name: chartMetric.value.title, type: 'line' as const, connectNulls: false, symbolSize: points.length > 45 ? 3 : 6,
+      name: chartMetric.value.title, type: 'line' as const, connectNulls: false, symbol: 'circle', symbolSize: points.length > 45 ? 3 : 5,
       data: points.map(point => point[chartMetric.value.key]), lineStyle: {color: chartColor.value, width: 2},
-      itemStyle: {color: chartColor.value}, areaStyle: {opacity: 0.07, color: chartColor.value}
+      itemStyle: {color: chartColor.value}, areaStyle: {opacity: 0.09, color: chartColor.value}
     }]
   }
 })
@@ -138,6 +139,7 @@ function openMoment(moment: HomeMoment) {
     </header>
     <p v-if="summaryError" class="summary-status error-box" role="alert">{{ summaryError }}</p>
     <p v-else-if="summaryPending" class="summary-status muted small" role="status">正在读取概览…</p>
+    <div class="overview-workspace">
     <div class="week-values" :aria-busy="summaryPending">
       <article>
         <h3><Cigarette :size="16"/>吸烟</h3>
@@ -167,19 +169,10 @@ function openMoment(moment: HomeMoment) {
         <p v-if="priceMissing" class="sensitive">{{priceMissing}} 条待补价格，仅计已知费用</p>
         <p v-else-if="total.consumptionCost != null" class="sensitive">烟 {{money(total.smokingCost)}} · 酒 {{money(total.alcoholCost)}}</p>
         <details v-if="isLifetime" class="cost-disclosure"><summary>计算依据</summary><p>烟按根数分摊每包单价，酒按饮用量分摊每瓶单价。累计金额为各笔已知费用之和。</p></details>
-        <button v-else class="week-detail" @click="emit('view','analytics')">计算依据 <ArrowUpRight :size="14"/></button>
+        <button v-else class="week-detail" @click="emit('view','analytics/cost')">计算依据 <ArrowUpRight :size="14"/></button>
       </article>
     </div>
-  </section>
-
-  <HomeDayReview :from="from" :to="to" :selected-date="selectedDate" :daily="daily" :scope="scope"
-    :earliest="state.lifetimeSummary.from || null" :loading="loading && !windowError" :error="windowError"
-    @select="emit('selectDay', $event)" @month="emit('month', $event)">
-    <HomeMomentList v-if="dayEntries.length" class="day-list" :entries="dayEntries" @open="openMoment"/>
-  </HomeDayReview>
-
-  <div class="overview-panels">
-    <section class="panel trend-panel">
+    <section class="trend-panel">
       <header class="panel-header">
         <div><h3>{{ trendTitle }}</h3><p v-if="trendCaption" class="trend-caption">{{ trendCaption }}</p></div>
         <div class="segmented chart-tabs" aria-label="趋势指标">
@@ -189,84 +182,102 @@ function openMoment(moment: HomeMoment) {
       </header>
       <div v-if="trendStatus" class="chart-status muted small" role="status">{{ trendStatus }}</div>
       <div v-else class="chart-wrap sensitive"><Chart :option="chartOption" :label="[trendTitle,chartMetric.title,trendCaption].filter(Boolean).join(' · ')"/></div>
-      <footer class="chart-footer"><span><i class="legend-line" :style="{background:chartColor}"></i>{{chartKind==='alcohol'?'折合 42° 白酒（ml）':chartKind==='intimacy'?'私人记录（次）':'吸烟（根）'}}</span><span>未记录按 0<template v-if="chartKind==='alcohol'">，仅折算已知酒量</template></span></footer>
+      <footer class="chart-footer"><span><i class="legend-line" :style="{background:chartColor}"></i>{{chartKind==='alcohol'?'折合 42° 白酒（ml）':chartKind==='intimacy'?'私人记录（次）':'吸烟（根）'}}</span><span v-if="chartKind==='alcohol'">纯酒精 g ÷ 0.789 ÷ 0.42</span><span>未记录按 0<template v-if="chartKind==='alcohol'">，仅折算已知酒量</template></span></footer>
     </section>
+    </div>
+  </section>
 
-    <section class="panel recent-panel">
-      <header class="panel-header">
-        <h3>最近记录 <small>{{ rangeLabel }}</small></h3>
-        <button class="text-link" @click="emit('view','history')">全部记录 <ArrowUpRight :size="14"/></button>
-      </header>
-      <HomeMomentList v-if="recent.length" class="recent-list" :entries="recent" show-date @open="openMoment"/>
-      <div v-else class="empty-state compact"><Clock3 :size="23"/><strong>这段时间没有行为记录</strong></div>
-    </section>
+  <HomeDayReview :from="from" :to="to" :selected-date="selectedDate" :daily="daily" :scope="scope"
+    :earliest="state.lifetimeSummary.from || null" :loading="loading && !windowError" :error="windowError"
+    @select="emit('selectDay', $event)" @month="emit('month', $event)">
+    <template #all><button type="button" class="text-link" @click="emit('view','history')">全部行为记录 <ArrowUpRight :size="14"/></button></template>
+    <template #recent>
+      <p class="list-range">{{shortDate(from)}} — {{shortDate(to)}}</p>
+      <HomeMomentList v-if="recent.length" class="day-list" :entries="recent" show-date @open="openMoment"/>
+      <p v-else class="list-range">这段时间没有行为记录</p>
+    </template>
+    <HomeMomentList v-if="dayEntries.length" class="day-list" :entries="dayEntries" @open="openMoment"/>
+  </HomeDayReview>
+
+  <div v-if="analytics?.associations || alcohol.status==='ESTIMATE' || alcohol.status==='INSUFFICIENT_DATA'" class="analysis-links panel">
+    <button v-if="analytics?.associations" @click="emit('view','analytics/association')">
+      <strong>与饮酒关联的记录</strong>
+      <span>{{rangeLabel}}</span>
+      <span v-for="(label,key) in {smoking:'吸烟',intimacy:'私人'}" :key="key" class="sensitive">
+        {{label}} {{analytics.associations[key]?.relatedEvents ?? '—'}} / {{analytics.associations[key]?.totalEvents ?? '—'}} 条
+        <template v-if="analytics.associations[key]?.uncertainEvents"> · 待判断 {{analytics.associations[key]?.uncertainEvents}} 条</template>
+      </span>
+      <ArrowUpRight :size="14"/>
+    </button>
+    <button v-if="alcohol.status==='ESTIMATE'||alcohol.status==='INSUFFICIENT_DATA'" @click="emit('view','analytics/estimate')">
+      <strong>最近一次饮酒估算</strong>
+      <span class="sensitive">{{alcohol.status==='INSUFFICIENT_DATA'?'有资料待补':'查看模型时长与计算依据'}}</span>
+      <ArrowUpRight :size="14"/>
+    </button>
   </div>
-  <div v-if="analytics?.associations" class="range-associations">
-    <p class="association-scope">关联统计 · {{ rangeLabel }}</p>
-    <AssociationSummary compact @details="emit('view','analytics')"/>
-  </div>
-  <details v-if="alcohol.status==='ESTIMATE'||alcohol.status==='INSUFFICIENT_DATA'" class="history-summary panel estimate-disclosure">
-    <summary><span><strong>最近一次饮酒估算</strong><small>{{alcohol.status==='INSUFFICIENT_DATA'?'有资料待补': '模型时长与计算依据'}}</small></span><ChevronDown :size="16"/></summary>
-    <AlcoholEstimate compact @view="emit('view',$event)" @repair="emit('repair',$event)"/>
-  </details>
 </div>
 </template>
 
 <style scoped>
-.week-summary { margin-bottom: 16px; overflow: hidden; }
-.week-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 15px 20px; border-bottom: 1px solid var(--border); }
-.week-header h2, .panel-header h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.summary-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
-.summary-title span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.scope-tabs button { min-height: 30px; padding: 4px 12px; font-size: 12px; }
-.scope-tabs button.active { color: var(--mint); background: var(--mint-bg); }
-.summary-status { margin: 12px 20px 0; }
-.cost-disclosure { margin-top: auto; font-size: 12px; color: var(--muted); }
-.cost-disclosure summary { display: list-item; padding: 6px 0; cursor: pointer; }
-.cost-disclosure p { margin-bottom: 2px; }
-.week-values { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.week-values article { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding: 16px 20px 14px; }
-.week-values article + article { border-left: 1px solid var(--border); }
-.week-values h3 { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); font-weight: 500; }
-.week-values h3 svg { color: var(--muted); }
-.week-value { margin: 6px 0 3px; font-size: clamp(22px, 2.1vw, 30px); font-weight: 550; line-height: 1.3; letter-spacing: -.03em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.week-value small { color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: normal; }
-.week-values p { margin: 0 0 9px; font-size: 11px; line-height: 1.6; color: var(--muted); }
-.week-action-row { display: flex; align-items: center; gap: 9px; margin-top: auto; flex-wrap: wrap; }
-.week-action, .week-detail { display: inline-flex; gap: 4px; align-items: center; margin-top: auto; min-height: 30px; font-size: 12px; font-weight: 500; }
-.week-action { background: var(--panel-soft); border: 1px solid var(--border); color: var(--text); padding: 3px 9px; border-radius: 6px; }
-.week-detail { padding: 3px 0; color: var(--muted); }
-.week-action:hover, .week-detail:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
-.overview-panels { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; margin-bottom: 20px; }
-.overview-panels .panel { min-width: 0; min-height: 0; }
-.overview-panels .panel-header { align-items: center; flex-wrap: wrap; padding: 16px 18px 6px; gap: 10px; }
-.chart-wrap { height: 212px; }
-.trend-caption { margin: 4px 0 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.chart-footer { font-size: 10px; color: var(--muted); flex-wrap: wrap; padding: 4px 18px 14px; }
-.chart-tabs button { font-size: 11px; padding: 5px 7px; }
-.recent-list { margin: 0 18px 6px; }
+.dashboard { container: overview / inline-size; display: grid; gap: 16px; min-width: 0; }
+.week-summary { overflow: hidden; }
+.week-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 14px 19px; border-bottom: 1px solid var(--border); }
+.week-header h2, .trend-panel h3 { margin: 0; font-size: 16px; font-weight: 650; }
+.summary-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 12px; }
+.summary-title span, .trend-caption { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.scope-tabs button, .chart-tabs button { min-height: 30px; padding: 4px 10px; font-size: 12px; }
+.summary-status { margin: 10px 18px 0; }
+.overview-workspace { display: grid; grid-template-columns: minmax(330px,.95fr) minmax(0,1.1fr); }
+.week-values { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.week-values article { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 14px 18px 12px; }
+.week-values article:nth-child(even) { border-left: 1px solid var(--border); }
+.week-values article:nth-child(n+3) { border-top: 1px solid var(--border); }
+.week-values h3 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 13px; font-weight: 550; }
+.week-values h3 svg { color: var(--mint); }
+.week-values article:nth-child(2) h3 svg { color: var(--blue); }
+.week-values article:nth-child(3) h3 svg { color: var(--pink); }
+.week-values article:nth-child(4) h3 svg { color: var(--muted); }
+.week-value { margin: 1px 0; font-variant-numeric: tabular-nums; font-size: clamp(21px, 2.4vw, 29px); line-height: 1.25; font-weight: 560; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.week-value small, .week-values p { font-size: 12px; color: var(--muted); font-weight: 400; letter-spacing: normal; }
+.week-values p { line-height: 1.55; margin: 0 0 3px; }
+.week-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; margin-top: auto; }
+.week-action, .week-detail, .cost-disclosure summary { display: inline-flex; align-items: center; gap: 3px; min-height: 27px; margin-top: auto; padding: 2px 0; color: var(--mint); font-size: 12px; font-weight: 550; }
+.week-detail, .cost-disclosure summary { color: var(--muted); }
+.week-action:hover, .week-detail:hover, .cost-disclosure summary:hover { text-decoration: underline; text-underline-offset: 3px; color: var(--text); }
+.cost-disclosure { margin-top: auto; }
+.cost-disclosure summary { display: list-item; cursor: pointer; }
+.trend-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+.trend-panel .panel-header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 14px 16px 0; }
+.trend-panel h3 { font-size: 14px; }
+.trend-caption { margin: 4px 0 0; }
+.chart-tabs button { padding: 4px 8px; }
+.chart-wrap { flex: 1; min-height: 185px; height: 185px; padding: 0 9px; }
+.chart-status { display: grid; flex: 1; min-height: 140px; place-items: center; }
+.chart-footer { justify-content: flex-start; flex-wrap: wrap; padding: 8px 18px 14px; font-size: 11px; color: var(--muted); }
+.chart-footer > span:last-child { margin-left: auto; }
+.list-range { margin: 8px 0; color: var(--muted); font-size: 12px; }
 .day-list { max-height: 270px; overflow-y: auto; }
-.recent-panel h3 small { margin-left: 5px; font-size: 11px; font-weight: 400; color: var(--muted); }
-.chart-status { min-height: 212px; display: grid; place-items: center; }
-.association-scope { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
-.estimate-disclosure :deep(.alcohol-reference) { border-width: 1px 0 0; border-radius: 0; }
-.dashboard :is(button, summary):focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-@media (max-width: 1000px) {
+.analysis-links { display: flex; flex-wrap: wrap; }
+.analysis-links button { display: flex; align-items: center; flex-wrap: wrap; flex: 1 1 280px; gap: 4px 12px; min-width: 0; min-height: 45px; padding: 10px 16px; font-size: 12px; text-align: left; }
+.analysis-links button:hover { background: var(--panel-soft); }
+.analysis-links span { color: var(--muted); }
+.analysis-links svg { margin-left: auto; color: var(--mint); }
+@container overview (max-width: 770px) {
+  .overview-workspace { grid-template-columns: 1fr; }
+  .week-values { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .week-values article:nth-child(n+2) { border-top: 0; border-left: 1px solid var(--border); }
   .week-values article { padding: 12px; }
-  .overview-panels { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .trend-panel { border-left: 0; border-top: 1px solid var(--border); }
 }
-@media (max-width: 760px) {
-  .week-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@container overview (max-width: 570px) {
+  .week-header { padding: 12px; }
+  .summary-title { flex-direction: column; gap: 3px; }
+  .summary-title span { font-size: 11px; }
+  .week-values { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .week-values article:nth-child(3) { border-left: 0; }
   .week-values article:nth-child(n+3) { border-top: 1px solid var(--border); }
-  .overview-panels { grid-template-columns: minmax(0, 1fr); }
-  .week-action, .week-detail { min-height: 36px; }
-}
-@media (max-width: 470px) {
-  .week-header { padding: 12px; gap: 6px; flex-wrap: wrap; }
-  .summary-title span { font-size: 11px; }
-  .overview-panels .panel-header { padding: 14px 12px 6px; }
-  .chart-tabs button { font-size: 10px; }
-  .recent-list { margin-inline: 12px; }
+  .week-action, .week-detail { min-height: 32px; }
+  .chart-tabs button { padding: 3px 6px; }
+  .trend-panel .panel-header { padding: 12px 12px 0; }
 }
 </style>
